@@ -1,0 +1,1816 @@
+----- New DB Script starts here -----
+CREATE TYPE company_status AS ENUM ('active', 'in_active');
+
+-- Create company table
+CREATE TABLE company (
+    company_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    address VARCHAR(255),
+    phone VARCHAR(50),
+    email VARCHAR(255),
+    user_count INTEGER,
+    company_type INTEGER CHECK (company_type IN (1, 2)),
+    parent_id INTEGER,
+    category_type INTEGER CHECK (category_type IN (1, 2, 3)),
+    status company_status,
+    created_at DATE DEFAULT CURRENT_DATE,
+    CHECK ((phone IS NOT NULL) OR (email IS NOT NULL))
+);
+
+-- Create carrier table
+CREATE TABLE carrier (
+    carrier_id SERIAL PRIMARY KEY,
+    company_id INTEGER UNIQUE NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
+    mc_number VARCHAR(100) NOT NULL UNIQUE
+);
+
+-- Create dispatch_service table
+CREATE TABLE dispatch_service (
+    dispatch_service_id SERIAL PRIMARY KEY,
+    company_id INTEGER UNIQUE NOT NULL REFERENCES company(company_id) ON DELETE CASCADE
+);
+
+-- Create role table
+CREATE TYPE role_category AS ENUM ('standard', 'custom');
+
+CREATE TABLE role (
+    role_id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES company(company_id),
+    role_name VARCHAR(255) NOT NULL,
+    role_cat role_category NOT NULL,
+    CHECK ((role_cat = 'standard') OR (role_cat = 'custom' AND company_id IS NOT NULL))
+);
+
+-- Create the user table
+CREATE TYPE user_status AS ENUM ('active', 'in_active');
+
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    user_name VARCHAR(255),
+    user_email VARCHAR(255) UNIQUE NOT NULL,
+    phone VARCHAR(50),
+    password_hash BYTEA,
+    password_salt BYTEA,
+    company_id INTEGER REFERENCES company(company_id) ON DELETE SET NULL,
+    role_id INTEGER REFERENCES role(role_id) ON DELETE SET NULL,
+    status user_status DEFAULT 'active',
+    profile_image_url VARCHAR(255)
+);
+
+-- Create the module table -- 1 = Carrier, 2 = Dispatch, 3 = Both
+CREATE TYPE company_type_access AS ENUM ('1', '2', '3');
+
+CREATE TABLE module (
+    module_id SERIAL PRIMARY KEY,
+    module_name VARCHAR(255) NOT NULL,
+    tab_name VARCHAR(255),
+    company_type_access company_type_access NOT NULL 
+);
+
+-- Create the role_module_relationship table -- 1 = ReadOnly, 2 = Read&Write
+CREATE TYPE access_level_enum AS ENUM ('1', '2');
+
+CREATE TABLE role_module_relationship (
+    role_module_relationship_id SERIAL PRIMARY KEY,
+    module_id INTEGER NOT NULL REFERENCES module(module_id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES role(role_id) ON DELETE CASCADE,
+    access_level access_level_enum NOT NULL
+);
+
+-- Create component table
+CREATE TABLE component (
+    component_id SERIAL PRIMARY KEY,
+    module_id INTEGER NOT NULL REFERENCES module(module_id) ON DELETE CASCADE,
+    component_name VARCHAR(255) NOT NULL,
+    component_tab_name VARCHAR(255),
+    order_no INTEGER
+);
+
+-- Create the role_component_relationship table
+CREATE TABLE role_component_relationship (
+    role_component_relationship_id SERIAL PRIMARY KEY,
+    component_id INTEGER NOT NULL REFERENCES component(component_id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES role(role_id) ON DELETE CASCADE,
+    access_level access_level_enum NOT NULL
+);
+
+-- Create otp table
+CREATE TYPE otp_subject_enum AS ENUM ('sign_up', 'forget_password');
+
+CREATE TABLE otp (
+    otp_id SERIAL PRIMARY KEY,
+    otp_code INT NOT NULL,
+    receiver VARCHAR(255) NOT NULL,
+    generate_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    subject otp_subject_enum NOT NULL,
+    company_id INT REFERENCES company(company_id) ON DELETE SET NULL,
+    CHECK (subject != 'sign_up' OR company_id IS NULL)
+);
+
+-- Create subscription_request table
+CREATE TABLE subscription_request (
+    subscription_request_id SERIAL PRIMARY KEY,
+    carrier_id INTEGER REFERENCES carrier(carrier_id) ON DELETE CASCADE,
+    dispatch_service_id INTEGER REFERENCES dispatch_service(dispatch_service_id) ON DELETE CASCADE,
+    status VARCHAR(50) NOT NULL,
+    request_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    approve_date DATE
+);
+
+-- Create request_module table
+CREATE TABLE request_module (
+    request_module_id SERIAL PRIMARY KEY,
+    subscription_request_id INTEGER NOT NULL REFERENCES subscription_request(subscription_request_id) ON DELETE CASCADE,
+    module_id INTEGER NOT NULL REFERENCES module(module_id) ON DELETE CASCADE
+);
+
+-- Create the maintenance_issue table
+CREATE TYPE issue_type_enum AS ENUM ('one_time', 'recurring');
+CREATE TYPE issue_cat_enum AS ENUM ('standard', 'customized');
+
+CREATE TABLE maintenance_issue (
+    issue_id SERIAL PRIMARY KEY,
+    issue_description VARCHAR(255) NOT NULL,
+    issue_type issue_type_enum NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    issue_cat issue_cat_enum NOT NULL,
+    carrier_id INTEGER REFERENCES carrier(carrier_id) ON DELETE SET NULL,
+    schedule_interval TIMESTAMP
+);
+
+-- Create driver table
+CREATE TYPE employment_type_enum AS ENUM ('w-2', 'contract');
+CREATE TYPE status_enum AS ENUM ('active', 'hometime', 'terminated');
+CREATE TYPE hiring_status_enum AS ENUM ('pending', 'approved', 'rejected');
+CREATE TYPE license_state_enum AS ENUM (
+            'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY',
+            'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND',
+            'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
+        );
+
+CREATE TABLE driver (
+    driver_id SERIAL PRIMARY KEY,
+    driver_name VARCHAR(255),
+    last_name VARCHAR(255),
+    employment_type employment_type_enum NOT NULL,
+    cdl_license_number VARCHAR UNIQUE NOT NULL,
+    address VARCHAR,
+    status status_enum,
+    hiring_status hiring_status_enum,
+    license_state license_state_enum,
+    email VARCHAR(255) UNIQUE,
+    phone_number VARCHAR(20),
+    rating INTEGER CHECK (rating BETWEEN 1 AND 5)
+);
+
+-- Create the vehicle table
+CREATE TYPE license_plate_state_enum AS ENUM (
+'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware',
+'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky',
+'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri',
+'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina',
+'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota',
+'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'
+);
+CREATE TYPE vehicle_status_enum AS ENUM ('active', 'inactive', 'in_maintenance', 'reserved');
+CREATE TYPE vehicle_type_enum AS ENUM ('truck', 'trailer');
+
+CREATE TABLE vehicle (
+    vehicle_id SERIAL PRIMARY KEY,
+    plate_number INTEGER,
+    license_plate_state license_plate_state_enum,
+    carrier_id INTEGER NOT NULL REFERENCES carrier(carrier_id) ON DELETE SET NULL,
+    vin_number VARCHAR UNIQUE NOT NULL,
+    vehicle_type vehicle_type_enum,
+    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+  --unit_id INTEGER UNIQUE REFERENCES unit(unit_id) ON DELETE SET NULL,    
+    is_assigned BOOLEAN,
+    year INTEGER CHECK (year BETWEEN 1900 AND EXTRACT(YEAR FROM CURRENT_DATE)),
+    created_at DATE DEFAULT CURRENT_DATE,
+    vehicle_trademark VARCHAR,
+    status vehicle_status_enum
+  --CONSTRAINT unique_unit_vehicle_type UNIQUE (unit_id, vehicle_type)
+);
+
+
+-- Create the truck table
+CREATE TYPE truck_fuel_type_enum AS ENUM ('diesel', 'gasoline', 'hybrid', 'electric');
+
+CREATE TABLE truck (
+    truck_id SERIAL PRIMARY KEY,
+    brand VARCHAR(255) NOT NULL,
+    vehicle_id INTEGER REFERENCES vehicle(vehicle_id) UNIQUE NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    fuel_type truck_fuel_type_enum NOT NULL,
+    color VARCHAR(50) NOT NULL
+);
+
+-- Create the truck_tracking table
+CREATE TABLE truck_tracking (
+    tracking_id SERIAL PRIMARY KEY,
+    truck_id INTEGER NOT NULL REFERENCES truck(truck_id),
+    odometer INT NOT NULL,
+    last_update_odometer DATE NOT NULL,
+    speed INT NOT NULL,
+    last_update_speed DATE NOT NULL,
+    mileage INT NOT NULL,
+    last_updated_mileage DATE NOT NULL
+);
+
+-- Create the trailer table
+CREATE TYPE trailer_type_enum AS ENUM ('van', 'reefer', 'flatbed', 'step', 'rgn');
+
+CREATE TABLE trailer (
+    trailer_id SERIAL PRIMARY KEY,
+    trailer_type trailer_type_enum NOT NULL,
+    vehicle_id INTEGER UNIQUE REFERENCES vehicle(vehicle_id)
+);
+
+-- Create the unit table
+CREATE TYPE unit_status_enum AS ENUM ('idle', 'driving', 'engine_off');
+
+CREATE TABLE unit (
+    unit_id SERIAL PRIMARY KEY,
+    carrier_id INTEGER NOT NULL REFERENCES carrier(carrier_id) ON DELETE CASCADE,
+    driver_id INTEGER NOT NULL REFERENCES driver(driver_id) ON DELETE SET NULL,
+    dispatcher_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status unit_status_enum NOT NULL,
+    last_updated_status DATE NOT NULL,
+    truck_id INTEGER NOT NULL REFERENCES truck(truck_id) ON DELETE SET NULL,
+    trailer_id INTEGER NOT NULL REFERENCES trailer(trailer_id) ON DELETE SET NULL
+);
+
+-- Create the issue_ticket table
+CREATE TYPE priority_enum AS ENUM ('low', 'medium', 'high');
+CREATE TYPE issue_ticket_status_enum AS ENUM ('open', 'in_progress', 'resolved');
+
+CREATE TABLE issue_ticket (
+    ticket_id SERIAL PRIMARY KEY,
+    issue_id INTEGER NOT NULL REFERENCES maintenance_issue(issue_id) ON DELETE CASCADE,
+    next_schedule_date TIMESTAMP,
+    schedule_date TIMESTAMP,
+    completed_date TIMESTAMP,
+    vehicle_id INTEGER REFERENCES vehicle(vehicle_id) ON DELETE SET NULL,
+    priority priority_enum,
+    status issue_ticket_status_enum,
+    assigned_user INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+    ismanaged_recurringly BOOLEAN DEFAULT FALSE,
+    carrier_id INTEGER NOT NULL REFERENCES carrier(carrier_id) ON DELETE CASCADE
+);
+
+-- Create the document_type table
+CREATE TYPE doc_cat_enum AS ENUM ('standard', 'custom');
+CREATE TYPE doc_type_enum AS ENUM ('route_doc', 'vehicle_doc', 'driver_doc', 'ticket_doc', 'accident_doc', 'violation_doc');
+
+CREATE TABLE document_type (
+    doc_type_id SERIAL PRIMARY KEY,
+    doc_name VARCHAR UNIQUE NOT NULL,
+    doc_cat doc_cat_enum NOT NULL,
+    doc_type doc_type_enum NOT NULL,
+    company_id INT REFERENCES company(company_id) ON DELETE SET NULL,
+
+    CONSTRAINT company_id_required_if_custom CHECK (
+        (doc_cat = 'custom' AND company_id IS NOT NULL) OR 
+        (doc_cat = 'standard' AND company_id IS NULL)
+    )
+);
+
+-- Create the driver_doc table
+CREATE TYPE driver_doc_status_enum AS ENUM ('active', 'canceled', 'renewal_due', 'rejected', 'expired');
+
+CREATE TABLE driver_doc (
+    doc_id SERIAL PRIMARY KEY,
+    doc_type_id INTEGER NOT NULL REFERENCES document_type(doc_type_id),
+    driver_id INTEGER NOT NULL REFERENCES driver(driver_id),
+    file_path VARCHAR NOT NULL,
+    status driver_doc_status_enum NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    updated_at DATE NOT NULL
+);
+
+-- Create the event_driver table
+CREATE TYPE event_driver_status_enum AS ENUM ('on_time', 'complete', 'driver_missed_it', 'rescheduled');
+
+CREATE TABLE event_driver (
+    event_id SERIAL PRIMARY KEY,
+    event_type VARCHAR(255) NOT NULL,
+    driver_id INTEGER NOT NULL REFERENCES driver(driver_id),
+    scheduled_date DATE NOT NULL,
+    deadline DATE NOT NULL,
+    status event_driver_status_enum NOT NULL
+);
+
+-- Create the vehicle_location table
+CREATE TYPE us_state_enum AS ENUM (
+            'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 
+            'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 
+            'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 
+            'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 
+            'WI', 'WY'
+        );
+
+CREATE TABLE vehicle_location (
+    location_id SERIAL PRIMARY KEY,
+    vehicle_id INTEGER NOT NULL UNIQUE REFERENCES vehicle(vehicle_id),
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL,
+    location_state us_state_enum NOT NULL,
+    location_city VARCHAR(255),
+    last_updated_location DATE NOT NULL
+);
+
+-- Create the vehicle_attributes table
+CREATE TYPE vehicle_type_enum AS ENUM ('truck', 'trailer');
+
+CREATE TABLE vehicle_attributes (
+    attribute_id SERIAL PRIMARY KEY,
+    vehicle_id INTEGER NOT NULL UNIQUE REFERENCES vehicle(vehicle_id),
+    is_headrake BOOLEAN,
+    have_flatbed BOOLEAN,
+    have_loadbar BOOLEAN,
+    have_van_straps BOOLEAN,
+    weight INT,
+    axle_spacing INT,
+    num_of_axles INT,
+    vehicle_type vehicle_type_enum NOT NULL,
+    updated_at DATE
+);
+
+-- Create the vehicle_document table
+CREATE TYPE vehicle_document_status_enum AS ENUM ('active', 'canceled', 'renewal_due', 'rejected', 'expired');
+
+CREATE TABLE vehicle_document (
+    doc_id SERIAL PRIMARY KEY,
+    doc_type_id INTEGER NOT NULL REFERENCES document_type(doc_type_id),
+    vehicle_id INTEGER NOT NULL UNIQUE REFERENCES vehicle(vehicle_id),
+    state_code us_state_enum,
+    start_date DATE,
+    end_date DATE,
+    contract_file VARCHAR,
+    cost INT,
+    updated_at DATE,
+    status vehicle_document_status_enum NOT NULL
+);
+
+-- Create the violations table
+--REFERENCES violation_doc(violation_doc_id),
+CREATE TABLE violations (
+    violation_id SERIAL PRIMARY KEY,
+    unit_id INTEGER NOT NULL REFERENCES unit(unit_id),
+    violation_type VARCHAR(255),
+    inspect_report_file_id INTEGER, 
+    status VARCHAR(50),
+    company_fee INT,
+    violation_date DATE
+);
+
+-- Create the violation_doc table
+CREATE TYPE violation_doc_status_enum AS ENUM ('uploaded', 'not_uploaded');
+
+CREATE TABLE violation_doc (
+    violation_doc_id SERIAL PRIMARY KEY,
+    doc_type_id INTEGER REFERENCES document_type(doc_type_id),
+    violation_id INTEGER REFERENCES violations(violation_id),
+    file_path VARCHAR(255),
+    status violation_doc_status_enum
+);
+
+-- Create the ticket_doc table
+CREATE TYPE ticket_doc_status_enum AS ENUM ('uploaded', 'not_uploaded');
+
+-- REFERENCES unit_ticket(ticket_id),
+CREATE TABLE ticket_doc (
+    ticket_doc_id SERIAL PRIMARY KEY,
+    doc_type_id INTEGER REFERENCES document_type(doc_type_id),
+    ticket_id INTEGER, 
+    file_path VARCHAR(255),
+    status ticket_doc_status_enum
+);
+
+-- Create the unit_ticket table
+CREATE TYPE unit_ticket_status_enum AS ENUM ('in_court', 'paid');
+CREATE TYPE unit_ticket_type_enum AS ENUM ('over_speed', 'over_weight', 'license_expire', 'dui');
+
+CREATE TABLE unit_ticket (
+    ticket_id SERIAL PRIMARY KEY,
+    unit_id INTEGER REFERENCES unit(unit_id),
+    ticket_type unit_ticket_type_enum,
+    issue_date DATE,
+    company_fee INT,
+    ticket_doc_id INTEGER REFERENCES ticket_doc(ticket_doc_id),
+    status unit_ticket_status_enum
+);
+
+-- Create the unit_assignment_history table
+CREATE TYPE unit_assignment_history_status_enum AS ENUM ('active', 'replaced', 'ended');
+CREATE TYPE unit_assignment_history_vehicle_type_enum AS ENUM ('truck', 'trailer');
+
+CREATE TABLE unit_assignment_history (
+    assignment_id SERIAL PRIMARY KEY,
+    vehicle_id INTEGER REFERENCES vehicle(vehicle_id),
+    vehicle_type unit_assignment_history_vehicle_type_enum,
+    unit_id INTEGER REFERENCES unit(unit_id),
+    start_date DATE,
+    end_date DATE,
+    status unit_assignment_history_status_enum
+);
+
+-- Create the incident table
+CREATE TABLE incident (
+    incident_id SERIAL PRIMARY KEY,
+    unit_id INTEGER REFERENCES unit(unit_id),
+    description VARCHAR,
+    incident_type VARCHAR,
+    incident_date DATE,
+    incident_picture TEXT[],
+    invoice_amount INT,
+    invoice_date DATE,
+    closure_date DATE
+);
+
+-- Create the accident table
+CREATE TABLE accident (
+    accident_id SERIAL PRIMARY KEY,
+    unit_id INTEGER REFERENCES unit(unit_id),
+    has_casuality BOOL,
+    accident_occure_date DATE,
+    driver_drug_test BOOL,
+    police_report_id INT,
+    driver_report_id INT,
+    damage_photo TEXT[]
+);
+
+-- Create the claim table
+CREATE TYPE claim_type_enum AS ENUM ('full', 'partial');
+CREATE TYPE claim_status_enum AS ENUM ('rejected', 'accepted', 'under_review', 'completed');
+
+CREATE TABLE claim (
+    claim_id SERIAL PRIMARY KEY,
+    accident_id INTEGER REFERENCES accident(accident_id),
+    claim_type claim_type_enum NOT NULL,
+    claim_amount INT NOT NULL,
+    status claim_status_enum NOT NULL,
+    created_at DATE NOT NULL DEFAULT CURRENT_DATE,
+    updated_at DATE NOT NULL DEFAULT CURRENT_DATE
+);
+
+-- Create the accident_doc table
+CREATE TYPE accident_doc_status_enum AS ENUM ('uploaded', 'not_uploaded');
+
+CREATE TABLE accident_doc (
+    accident_doc_id SERIAL PRIMARY KEY,
+    accident_id INTEGER REFERENCES accident(accident_id),
+    doc_type_id INTEGER REFERENCES document_type(doc_type_id),
+    status accident_doc_status_enum NOT NULL,
+    file_path VARCHAR NOT NULL,
+    update_date DATE NOT NULL DEFAULT CURRENT_DATE
+);
+
+-- Create the refresh_tokens table
+CREATE TABLE refresh_tokens (
+    refresh_token_id SERIAL PRIMARY KEY,
+    refresh_token VARCHAR(255) NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(user_id),
+    expiration_time TIMESTAMP NOT NULL,
+    is_revoked BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+
+-- ALTER QUERIES
+ALTER TABLE vehicle
+ADD COLUMN unit_id INTEGER UNIQUE REFERENCES unit(unit_id) ON DELETE SET NULL,
+ADD CONSTRAINT unique_unit_vehicle_type UNIQUE (unit_id, vehicle_type);
+
+ALTER TABLE violations
+ADD CONSTRAINT fk_inspect_report_file
+FOREIGN KEY (inspect_report_file_id) REFERENCES violation_doc(violation_doc_id);
+
+ALTER TABLE ticket_doc
+ADD CONSTRAINT fk_ticket_id
+FOREIGN KEY (ticket_id) REFERENCES unit_ticket(ticket_id);
+
+-- INSERT QUERIES
+INSERT INTO module (module_id, module_name, tab_name, company_type_access)
+VALUES
+    (1, 'Dispatch', 'Dispatch', '1'::company_type_access),
+    (2, 'Unit', 'Unit', '1'::company_type_access),
+    (3, 'Accounts', 'Accounts', '1'::company_type_access),
+    (4, 'Safety', 'Safety', '1'::company_type_access),
+    (5, 'HR', 'HR', '1'::company_type_access),
+    (6, 'Shop', 'Shop', '1'::company_type_access),
+    (7, 'Setting', 'Setting', '1'::company_type_access),
+    (8, 'Client', 'Client', '1'::company_type_access),
+    (9, 'Subscription_Carrier', 'Subscription', '1'::company_type_access),
+    (10, 'Subscription_Dispatch', 'Subscription', '2'::company_type_access);
+
+INSERT INTO role (role_id, role_name, role_cat, company_id)
+VALUES
+    (1, 'SuperAdmin', 'standard', NULL),
+    (2, 'HR', 'standard', NULL),
+    (3, 'Safety', 'standard', NULL),
+    (4, 'Admin', 'standard', NULL);
+
+INSERT INTO component (component_id, module_id, component_name, component_tab_name, order_no)
+VALUES
+    (1, 7, 'Role', 'Role', 1),
+    (2, 7, 'Document', 'Document', 2),
+    (3, 7, 'User', 'User', 3),
+    (4, 7, 'Payment', 'Payment', 4),
+    (5, 7, 'Profile', 'Profile', 5);
+
+INSERT INTO role_module_relationship (role_module_relationship_id, role_id, module_id, access_level)
+VALUES
+    (1, 1, 1, '2'::access_level_enum),
+    (2, 1, 2, '2'::access_level_enum),
+    (3, 1, 3, '2'::access_level_enum),
+    (4, 1, 4, '2'::access_level_enum),
+    (5, 1, 5, '2'::access_level_enum),
+    (6, 1, 6, '2'::access_level_enum),
+    (7, 1, 7, '2'::access_level_enum),
+    (8, 1, 8, '2'::access_level_enum),
+    (9, 1, 9, '2'::access_level_enum),
+    (10, 2, 2, '1'::access_level_enum),
+    (11, 2, 3, '1'::access_level_enum),
+    (12, 2, 4, '1'::access_level_enum),
+    (13, 2, 5, '2'::access_level_enum),
+    (14, 3, 1, '1'::access_level_enum),
+    (15, 3, 2, '1'::access_level_enum),
+    (16, 3, 4, '2'::access_level_enum),
+    (17, 3, 5, '1'::access_level_enum),
+    (18, 3, 6, '1'::access_level_enum),
+    (19, 4, 1, '1'::access_level_enum),
+    (20, 4, 2, '1'::access_level_enum),
+    (21, 4, 3, '1'::access_level_enum),
+    (22, 4, 4, '1'::access_level_enum),
+    (23, 4, 5, '1'::access_level_enum),
+    (24, 4, 6, '1'::access_level_enum),
+    (25, 4, 7, '2'::access_level_enum),
+    (26, 4, 8, '1'::access_level_enum),
+    (27, 4, 9, '1'::access_level_enum);
+
+INSERT INTO role_component_relationship (role_component_relationship_id, role_id, component_id, access_level)
+VALUES
+    (1, 1, 1, '2'::access_level_enum),
+    (2, 1, 2, '2'::access_level_enum),
+    (3, 1, 3, '2'::access_level_enum),
+    (4, 1, 4, '2'::access_level_enum),
+    (5, 1, 5, '2'::access_level_enum),
+    (6, 2, 1, '1'::access_level_enum),
+    (7, 2, 2, '1'::access_level_enum),
+    (8, 2, 3, '2'::access_level_enum),
+    (9, 2, 4, '2'::access_level_enum),
+    (10, 2, 5, '2'::access_level_enum);
+
+INSERT INTO document_type (doc_type_id, doc_name, doc_cat, doc_type, company_id)
+VALUES
+    (1, 'Docs - CDL', 'standard', 'driver_doc', NULL),
+    (2, 'Medical Card', 'standard', 'driver_doc', NULL),
+    (3, 'Social Security', 'standard', 'driver_doc', NULL),
+    (4, 'Application', 'standard', 'driver_doc', NULL),
+    (5, 'Contract', 'standard', 'driver_doc', NULL),
+    (6, 'Drug Test', 'standard', 'driver_doc', NULL),
+    (7, 'MVR & PSP', 'standard', 'driver_doc', NULL),
+    (8, 'W4', 'standard', 'driver_doc', NULL),
+    (9, 'I9', 'standard', 'driver_doc', NULL),
+    (10, 'Termination File', 'standard', 'driver_doc', NULL),
+    (12, 'VOE', 'standard', 'driver_doc', NULL),
+    (13, 'Driver Legal Plan', 'standard', 'driver_doc', NULL),
+    (14, 'Bank Info', 'standard', 'driver_doc', NULL),
+    (15, 'OCC ACC Application', 'standard', 'driver_doc', NULL),
+    (16, 'Fuel Card', 'standard', 'driver_doc', NULL),
+    (17, 'Title', 'standard', 'vehicle_doc', NULL),
+    (18, 'Registration', 'standard', 'vehicle_doc', NULL),
+    (19, 'Insurance', 'standard', 'vehicle_doc', NULL),
+    (20, 'IFTA', 'standard', 'vehicle_doc', NULL),
+    (21, 'Permit', 'standard', 'vehicle_doc', NULL),
+    (22, 'UCR', 'standard', 'vehicle_doc', NULL),
+    (23, 'Lease Agreement', 'standard', 'vehicle_doc', NULL),
+    (24, 'Driver Report', 'standard', 'accident_doc', NULL),
+    (25, 'Police Report', 'standard', 'accident_doc', NULL),
+    (26, 'Ticket Receipt', 'standard', 'ticket_doc', NULL),
+    (27, 'Violation Receipt', 'standard', 'violation_doc', NULL);
+
+
+UPDATE users
+SET phone = ''
+WHERE phone IS NULL;
+
+ALTER TABLE users
+ALTER COLUMN user_email DROP NOT NULL;
+
+UPDATE users
+SET user_email = ''
+WHERE user_email IS NULL;
+
+UPDATE users
+SET profile_image_url = ''
+WHERE profile_image_url IS NULL;
+
+ALTER TABLE users
+ALTER COLUMN phone SET DEFAULT '';
+
+ALTER TABLE users
+ALTER COLUMN user_email SET DEFAULT '';
+
+ALTER TABLE users
+ALTER COLUMN profile_image_url SET DEFAULT '';
+
+
+INSERT INTO driver (
+    driver_name, last_name, employment_type, cdl_license_number, address, status, hiring_status, license_state, email, phone_number, rating
+) VALUES (
+    'John', 
+    'Doe', 
+    'w-2',
+    'CDL12345', 
+    '123 Main St, Springfield', 
+    'active',  
+    'approved', 
+    'CA', 
+    'john.doe@example.com', 
+    '+1234567890', 
+    5
+);
+
+-- Drop the existing ENUM type and replace it with integers
+ALTER TABLE role_module_relationship DROP COLUMN access_level;
+
+ALTER TABLE role_module_relationship ADD COLUMN access_level INTEGER DEFAULT 0 NOT NULL;
+
+UPDATE role_module_relationship
+SET access_level = 
+    CASE 
+        WHEN access_level = '1' THEN 1
+        WHEN access_level = '2' THEN 2
+        ELSE 0
+    END::INTEGER;
+
+ALTER TABLE role_module_relationship 
+ALTER COLUMN access_level DROP DEFAULT;
+
+SELECT * FROM role_module_relationship;
+
+UPDATE role_module_relationship
+SET access_level = 2
+WHERE role_module_relationship_id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 16, 25);
+
+UPDATE role_module_relationship
+SET access_level = 1
+WHERE role_module_relationship_id IN (10, 11, 12, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27);
+
+ALTER TABLE role_component_relationship DROP COLUMN access_level;
+ALTER TABLE role_component_relationship ADD COLUMN access_level INTEGER DEFAULT 0 NOT NULL;
+
+UPDATE role_component_relationship
+SET access_level = 
+    CASE 
+        WHEN access_level = '1' THEN 1
+        WHEN access_level = '2' THEN 2
+        ELSE 0
+    END::INTEGER;
+	
+ALTER TABLE role_component_relationship 
+ALTER COLUMN access_level DROP DEFAULT;
+
+UPDATE role_component_relationship
+SET access_level = 2
+WHERE role_component_relationship_id IN (1, 2, 3, 4, 5, 8, 9, 10);
+
+UPDATE role_component_relationship
+SET access_level = 1
+WHERE role_component_relationship_id IN (6, 7);
+
+SELECT unnest(enum_range(NULL::access_level_enum)) AS enum_value;
+
+DROP TYPE access_level_enum;
+CREATE TYPE access_level_enum AS ENUM ('1', '2', '0');
+
+UPDATE role_component_relationship
+SET role_id = 4
+WHERE role_id = 2;
+
+
+
+
+
+-- Rename the table
+ALTER TABLE vehicle_location RENAME TO truck_location;
+
+-- Rename the column vehicle_id to truck_id
+ALTER TABLE truck_location RENAME COLUMN vehicle_id TO truck_id;
+
+-- Update the foreign key to reference the truck table
+ALTER TABLE truck_location
+DROP CONSTRAINT vehicle_location_vehicle_id_fkey,
+ADD CONSTRAINT truck_location_truck_id_fkey FOREIGN KEY (truck_id) REFERENCES truck(truck_id);
+
+-- Verify if the data types and constraints are as needed
+-- If truck_id should be a unique foreign key:
+-- Drop the old unique constraint
+ALTER TABLE truck_location
+DROP CONSTRAINT vehicle_location_vehicle_id_key;
+
+-- Add a new unique constraint on truck_id
+ALTER TABLE truck_location
+ADD CONSTRAINT truck_location_truck_id_key UNIQUE (truck_id);
+
+-- Ensure the primary key is updated if necessary
+ALTER TABLE truck_location
+DROP CONSTRAINT vehicle_location_pkey,
+
+ALTER TABLE truck_location
+ADD CONSTRAINT truck_location_pkey PRIMARY KEY (location_id);
+
+
+
+
+-- Create truck_status_enum
+CREATE TYPE truck_status_enum AS ENUM ('idle', 'driving', 'engine_off');
+
+-- Add truck_status column
+ALTER TABLE truck
+ADD COLUMN truck_status truck_status_enum;
+
+-- Update unit_status_enum
+CREATE TYPE unit_status_enum_new AS ENUM ('active', 'inactive');
+
+ALTER TABLE unit
+ALTER COLUMN status TYPE unit_status_enum_new
+USING status::TEXT::unit_status_enum_new;
+
+DROP TYPE unit_status_enum;
+
+ALTER TYPE unit_status_enum_new RENAME TO unit_status_enum;
+
+
+
+
+-- Drop the table
+DROP TABLE IF EXISTS unit_assignment_history;
+
+-- Drop the enums if not used elsewhere
+DROP TYPE IF EXISTS unit_assignment_history_status_enum;
+DROP TYPE IF EXISTS unit_assignment_history_vehicle_type_enum;
+
+
+
+-- Add ticket_id (nullable) into accident Table
+ALTER TABLE accident
+ADD COLUMN ticket_id INTEGER NULL;
+
+
+-- Drop the existing violations table
+DROP TABLE IF EXISTS violations CASCADE;
+
+-- Drop the existing violation_doc table
+DROP TABLE IF EXISTS violation_doc;
+
+-- Create the new violation table
+CREATE TABLE violation (
+    violation_id SERIAL PRIMARY KEY,
+    violation_type VARCHAR(255) NOT NULL,
+    description VARCHAR(255) NOT NULL,
+    penalty_points INT NOT NULL CHECK (penalty_points >= 0),
+    fine_amount DECIMAL(10, 2) NOT NULL CHECK (fine_amount >= 0)
+);
+
+-- Insert data into the newly created violation table
+INSERT INTO violation (violation_id, violation_type, description, penalty_points, fine_amount) VALUES
+(1, 'Speeding', 'Exceeding speed limit', 2, 50.00),
+(2, 'DUI', 'Driving under influence', 6, 200.00),
+(3, 'Red Light', 'Running a red light', 3, 75.00);
+
+-- Create the new ticket_violation table
+CREATE TABLE ticket_violation (
+    ticket_violation_id SERIAL PRIMARY KEY,
+    ticket_id INT NOT NULL REFERENCES unit_ticket(ticket_id) ON DELETE CASCADE,
+    violation_id INT NOT NULL REFERENCES violation(violation_id) ON DELETE CASCADE,
+    violation_date TIMESTAMP NOT NULL
+);
+
+-- Alter tables
+ALTER TABLE vehicle
+DROP COLUMN unit_id;
+
+ALTER TABLE truck
+ADD COLUMN unit_id INT UNIQUE REFERENCES unit(unit_id) ON DELETE SET NULL;
+
+ALTER TABLE trailer
+ADD COLUMN unit_id INT UNIQUE REFERENCES unit(unit_id) ON DELETE SET NULL;
+
+
+-- Create Unique Index
+CREATE UNIQUE INDEX unique_email_on_company ON public.company (email)
+WHERE email IS NOT NULL;
+
+CREATE UNIQUE INDEX unique_phone_on_company ON public.company (phone)
+WHERE phone IS NOT NULL;
+
+
+-- Alter enum
+ALTER TYPE employment_type_enum ADD VALUE 'w_2';
+
+-- Update driver table
+UPDATE driver
+SET employment_type = 'w_2'
+WHERE employment_type = 'w-2';
+
+
+-- Add the `company_id` column to the `driver` table
+ALTER TABLE driver
+ADD COLUMN company_id INT;
+
+-- Set up the foreign key relationship with the `Company` table
+ALTER TABLE driver
+ADD CONSTRAINT FK_driver_company
+FOREIGN KEY (company_id) REFERENCES Company(company_id)
+ON DELETE SET NULL;
+
+-- Alter driver table
+ALTER TABLE driver
+ADD COLUMN is_assign BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Create Performance_Event Table
+CREATE TYPE event_type_enum AS ENUM ('ticket', 'accident', 'incident');
+CREATE TABLE performance_event (
+    event_id SERIAL PRIMARY KEY,
+    event_type event_type_enum NOT NULL,
+    driver_id INT REFERENCES driver(driver_id) ON DELETE CASCADE,
+    truck_id INT REFERENCES truck(truck_id) ON DELETE CASCADE,
+    date TIMESTAMP NOT NULL
+);
+
+-- Alter unit_ticket table
+ALTER TABLE unit_ticket
+DROP COLUMN unit_id,
+DROP COLUMN ticket_type,
+DROP COLUMN issue_date,
+ADD COLUMN event_id INT REFERENCES performance_event(event_id) ON DELETE CASCADE;
+
+-- Alter accident table
+ALTER TABLE accident
+DROP COLUMN unit_id,
+ADD COLUMN event_id INT REFERENCES performance_event(event_id) ON DELETE CASCADE;
+
+-- Alter incident table
+ALTER TABLE incident
+DROP COLUMN unit_id,
+ADD COLUMN event_id INT REFERENCES performance_event(event_id) ON DELETE CASCADE;
+
+
+-- Delete Module 5 (HR).
+delete from module where module_id = 5
+
+-- Add a component for Module 4 (Safety): Component: Performance | Access level: 2 rights for Role ID 1 and Role ID 3.
+
+INSERT INTO component
+(component_id, module_id, component_name, component_tab_name, order_no)
+VALUES
+(6, 4, 'Performance', 'Performance', 6);
+
+INSERT INTO role_component_relationship
+(role_component_relationship_id, component_id, role_id, access_level)
+VALUES
+(11, 6, 1, 2),
+(12, 6, 3, 2)
+
+
+-- Create license_state_enum_new enum
+CREATE TYPE license_state_enum_new AS ENUM (
+    'al', 'ak', 'az', 'ar', 'ca', 'co', 'ct', 'de', 'fl', 'ga', 'hi', 'id', 'il', 'in', 'ia', 'ks', 'ky',
+    'la', 'me', 'md', 'ma', 'mi', 'mn', 'ms', 'mo', 'mt', 'ne', 'nv', 'nh', 'nj', 'nm', 'ny', 'nc', 'nd',
+    'oh', 'ok', 'or', 'pa', 'ri', 'sc', 'sd', 'tn', 'tx', 'ut', 'vt', 'va', 'wa', 'wv', 'wi', 'wy'
+);
+
+ALTER TABLE driver ADD COLUMN temp_license_state TEXT;
+
+UPDATE driver SET temp_license_state = LOWER(license_state::TEXT);
+
+ALTER TABLE driver
+ALTER COLUMN license_state TYPE license_state_enum_new USING temp_license_state::license_state_enum_new;
+
+ALTER TABLE driver DROP COLUMN temp_license_state;
+
+DROP TYPE license_state_enum;
+
+ALTER TYPE license_state_enum_new RENAME TO license_state_enum;
+
+
+ALTER TABLE unit_ticket 
+ALTER COLUMN ticket_doc_id DROP NOT NULL;
+
+ALTER TABLE unit_ticket 
+DROP CONSTRAINT IF EXISTS unit_ticket_ticket_doc_id_fkey;
+
+ALTER TABLE unit_ticket 
+ADD CONSTRAINT unit_ticket_ticket_doc_id_fkey 
+FOREIGN KEY (ticket_doc_id) REFERENCES ticket_doc(ticket_doc_id) 
+ON DELETE SET NULL;
+
+SELECT column_name, is_nullable, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'unit_ticket' AND column_name = 'ticket_doc_id';
+
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'ticket_doc' AND column_name = 'status';
+
+ALTER TABLE ticket_doc 
+ALTER COLUMN status TYPE TEXT USING status::text;
+
+
+ALTER TABLE performance_event
+ADD company_id INTEGER REFERENCES 
+company(company_id);
+
+ALTER TABLE unit_ticket
+DROP COLUMN ticket_doc_id;
+
+ALTER TABLE accident
+DROP COLUMN police_report_id,
+DROP COLUMN driver_report_id,
+DROP COLUMN damage_photo;
+
+ALTER TABLE incident
+DROP COLUMN incident_picture;
+
+CREATE TABLE accident_pictures (
+    picture_id SERIAL PRIMARY KEY,
+    accident_id INT REFERENCES accident(accident_id) ON DELETE CASCADE,
+    picture_url VARCHAR(255) NOT NULL,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE incident_pictures (
+    picture_id SERIAL PRIMARY KEY,
+    incident_id INT REFERENCES incident(incident_id) ON DELETE CASCADE,
+    picture_url VARCHAR(255) NOT NULL,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE accident_doc 
+ALTER COLUMN status TYPE TEXT USING status::text;
+
+
+CREATE TYPE license_plate_state_enum_new AS ENUM (
+    'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
+    'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
+    'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi', 'missouri',
+    'montana', 'nebraska', 'nevada', 'new_hampshire', 'new_jersey', 'new_mexico', 'new_york', 'north_carolina',
+    'north_dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode_island', 'south_carolina', 'south_dakota',
+    'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington', 'west_virginia', 'wisconsin', 'wyoming'
+);
+
+ALTER TABLE vehicle
+ADD COLUMN temp_license_plate_state TEXT;
+
+UPDATE vehicle SET temp_license_plate_state = LOWER(license_plate_state::TEXT);
+
+ALTER TABLE vehicle
+ALTER COLUMN license_plate_state TYPE license_plate_state_enum_new USING temp_license_plate_state::license_plate_state_enum_new;
+
+ALTER TABLE vehicle DROP COLUMN temp_license_plate_state;
+
+DROP TYPE license_plate_state_enum;
+
+ALTER TYPE license_plate_state_enum_new RENAME TO license_plate_state_enum;
+
+
+ALTER TABLE claim
+ADD COLUMN claim_description VARCHAR(255);
+
+
+------------------------
+CREATE TYPE recurrent_type_enum AS ENUM ('time', 'mileage');
+
+ALTER TABLE issue_ticket 
+ADD COLUMN recurrent_type recurrent_type_enum NULL,
+ADD COLUMN time_interval INT NULL,
+ADD COLUMN mileage_interval INT NULL,
+ADD COLUMN current_mileage INT NULL,
+ADD COLUMN next_mileage INT NULL;
+
+ALTER TABLE issue_ticket DROP COLUMN issue_id;
+
+drop table public.maintenance_issue;
+
+CREATE TYPE cat_type_enum AS ENUM ('standard', 'custom');
+
+CREATE TABLE maintenance_category (
+    category_id SERIAL PRIMARY KEY,
+    category_description VARCHAR(255),
+    category_name VARCHAR(255) NOT NULL,
+    cat_type cat_type_enum NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    carrier_id INT,
+    FOREIGN KEY (carrier_id) REFERENCES carrier(carrier_id) ON DELETE CASCADE
+);
+
+-- Add category_id as a foreign key referencing maintenance_category(category_id)
+ALTER TABLE issue_ticket 
+ADD COLUMN category_id INT,
+ADD CONSTRAINT fk_category FOREIGN KEY (category_id) REFERENCES maintenance_category(category_id) ON DELETE SET NULL;
+
+-- Remove issue_id column
+ALTER TABLE issue_ticket 
+DROP COLUMN issue_id;
+
+-- Add created_by as a foreign key referencing user(user_id)
+ALTER TABLE issue_ticket 
+ADD COLUMN created_by INT,
+ADD CONSTRAINT fk_created_by FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL;
+
+-- Add updated_at column
+ALTER TABLE issue_ticket 
+ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+
+
+insert into component (component_id, module_id, component_name, component_tab_name, order_no) 
+values (8, 6, 'Assets', 'Assets', 1);
+insert into component (component_id, module_id, component_name, component_tab_name, order_no) 
+values (9, 6, 'Category', 'Category', 2);
+insert into component (component_id, module_id, component_name, component_tab_name, order_no) 
+values (10, 6, 'Tickets', 'Tickets', 3);
+
+
+
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (8, 1, 2);
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (9, 1, 2);
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (10, 1, 2);
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (8, 4, 2);
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (9, 4, 2);
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (10, 4, 2);
+
+
+-- Delete the 'cost' column
+ALTER TABLE vehicle_document 
+DROP COLUMN cost;
+
+-- Rename 'contract_file' to 'path'
+ALTER TABLE vehicle_document 
+RENAME COLUMN contract_file TO path;
+
+
+CREATE TABLE ticket_file (
+    issue_file_id SERIAL PRIMARY KEY,
+    path VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	ticket_id INT NOT NULL,
+    FOREIGN KEY (ticket_id) REFERENCES issue_ticket(ticket_id) ON DELETE CASCADE
+);
+
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'truck' AND column_name = 'fuel_type';
+
+
+ALTER TABLE truck ALTER COLUMN fuel_type TYPE truck_fuel_type_enum USING fuel_type::truck_fuel_type_enum;
+
+ALTER TABLE truck DROP COLUMN fuel_type;
+
+
+ALTER TABLE truck ADD COLUMN fuel_type truck_fuel_type_enum NULL;
+
+UPDATE truck SET fuel_type = 'diesel' WHERE fuel_type IS NULL;
+
+ALTER TABLE truck ALTER COLUMN fuel_type SET NOT NULL;
+
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'truck' AND column_name = 'fuel_type';
+
+ALTER TABLE truck 
+ALTER COLUMN fuel_type TYPE TEXT USING fuel_type::text;
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'truck' AND column_name = 'truck_status';
+
+ALTER TABLE truck 
+ALTER COLUMN truck_status TYPE TEXT USING truck_status::text;
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'vehicle_document' AND column_name = 'state_code';
+
+ALTER TABLE vehicle_document 
+ALTER COLUMN state_code TYPE TEXT USING state_code::text;
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'vehicle_document' AND column_name = 'status';
+
+ALTER TABLE vehicle_document 
+ALTER COLUMN status TYPE TEXT USING status::text;
+
+
+
+
+
+INSERT INTO maintenance_category (category_description, category_name, cat_type, created_at, carrier_id) VALUES
+('Engine Maintenance', 'Engine', 'standard'::cat_type_enum, NOW(), NULL),
+('Brake System Check', 'Brakes', 'standard'::cat_type_enum, NOW(), NULL),
+('Oil Change', 'Oil Service', 'standard'::cat_type_enum, NOW(), NULL);
+
+INSERT INTO maintenance_category (category_description, category_name, cat_type, created_at, carrier_id) VALUES
+('Custom Engine Check', 'Engine', 'custom'::cat_type_enum, NOW(), 6),
+('Custom Brake Inspection', 'Brakes', 'custom'::cat_type_enum, NOW(), 6),
+('Suspension Tuning', 'Suspension', 'custom'::cat_type_enum, NOW(), 6),
+('Tire Alignment', 'Tires', 'custom'::cat_type_enum, NOW(), 6);
+ 
+
+
+
+
+ALTER TABLE issue_ticket
+ALTER COLUMN category_id DROP NOT NULL;
+
+SELECT * 
+FROM information_schema.key_column_usage
+WHERE table_name = 'issue_ticket' AND column_name = 'category_id';
+
+ALTER TABLE issue_ticket ADD COLUMN category_id_nullable INT NULL;
+
+UPDATE issue_ticket SET category_id_nullable = category_id;
+
+ALTER TABLE issue_ticket DROP COLUMN category_id;
+
+ALTER TABLE issue_ticket RENAME COLUMN category_id_nullable TO category_id;
+---
+ALTER TABLE truck
+ALTER COLUMN unit_id DROP NOT NULL;
+
+SELECT * 
+FROM information_schema.key_column_usage
+WHERE table_name = 'truck' AND column_name = 'unit_id';
+
+ALTER TABLE truck
+ADD CONSTRAINT fk_unit_id FOREIGN KEY (unit_id) REFERENCES unit(unit_id);
+
+ALTER TABLE truck ADD COLUMN unit_id_nullable INT NULL;
+
+UPDATE truck SET unit_id_nullable = unit_id;
+
+ALTER TABLE truck DROP COLUMN unit_id;
+
+ALTER TABLE truck RENAME COLUMN unit_id_nullable TO unit_id;
+---
+ALTER TABLE maintenance_category
+ALTER COLUMN carrier_id DROP NOT NULL;
+
+SELECT * 
+FROM information_schema.key_column_usage
+WHERE table_name = 'maintenance_category' AND column_name = 'carrier_id';
+
+ALTER TABLE maintenance_category
+ADD CONSTRAINT fk_carrier_id FOREIGN KEY (carrier_id) REFERENCES carrier(carrier_id);
+
+ALTER TABLE maintenance_category ADD COLUMN carrier_id_nullable INT NULL;
+
+UPDATE maintenance_category SET carrier_id_nullable = carrier_id;
+
+ALTER TABLE maintenance_category DROP COLUMN carrier_id;
+
+ALTER TABLE maintenance_category RENAME COLUMN carrier_id_nullable TO carrier_id;
+
+
+
+ALTER TABLE maintenance_category 
+ALTER COLUMN cat_type TYPE TEXT USING cat_type::text;
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'maintenance_category' AND column_name = 'cat_type';
+
+
+-- ALLOW NULL
+
+ALTER TABLE issue_ticket
+ALTER COLUMN recurrent_type DROP NOT NULL;
+
+SELECT * 
+FROM information_schema.key_column_usage
+WHERE table_name = 'issue_ticket' AND column_name = 'recurrent_type';
+
+
+-- ENUM TO TEXT
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'issue_ticket' AND column_name = 'recurrent_type';
+
+ALTER TABLE issue_ticket 
+ALTER COLUMN recurrent_type TYPE TEXT USING recurrent_type::text;
+
+
+-- Query to check for constraints starts
+SELECT conname, conrelid::regclass, conkey
+FROM pg_constraint
+WHERE conrelid = 'vehicle_document'::regclass;
+
+-- Modify the Unique Constraint
+ALTER TABLE vehicle_document DROP CONSTRAINT vehicle_document_vehicle_id_key;
+-- Query to check for constraints ends
+
+
+ALTER TABLE issue_ticket
+ALTER COLUMN schedule_date DROP NOT NULL;
+
+SELECT * 
+FROM information_schema.key_column_usage
+WHERE table_name = 'issue_ticket' AND column_name = 'schedule_date';
+
+ALTER TABLE issue_ticket 
+ADD COLUMN company_id INT,
+ADD CONSTRAINT fk_company FOREIGN KEY (company_id) 
+REFERENCES company(company_id) ON DELETE SET NULL;
+
+
+
+
+CREATE TABLE notifications (
+    id SERIAL PRIMARY KEY,
+    company_id INT NOT NULL,
+    module TEXT NOT NULL,
+    component TEXT NOT NULL,
+    access_level INT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for better performance
+CREATE INDEX idx_notifications_company ON notifications (company_id);
+CREATE INDEX idx_notifications_created_at ON notifications (created_at DESC);
+
+
+-- Updating the enum to include new event types
+ALTER TYPE event_type_enum ADD VALUE 'dot_inspection';
+ALTER TYPE event_type_enum ADD VALUE 'citation';
+ALTER TYPE event_type_enum ADD VALUE 'warning';
+
+-- Creating the event authority enum for authority types
+CREATE TYPE event_authority_enum AS ENUM ('dot', 'highway_patrol', 'port_of_entry');
+
+-- Creating the fee payer enum for payer types
+CREATE TYPE fees_paid_by_enum AS ENUM ('company', 'driver');
+
+ALTER TABLE performance_event
+    ADD COLUMN trailer_id INT REFERENCES trailer(trailer_id) ON DELETE CASCADE,
+    ADD COLUMN location TEXT,
+    ADD COLUMN authority event_authority_enum,
+    ADD COLUMN description TEXT,
+    ADD COLUMN load_id INT,
+    ADD COLUMN event_fees INT,
+    ADD COLUMN fees_paid_by fees_paid_by_enum,
+    ADD COLUMN company_fee_applied BOOLEAN,
+    ADD COLUMN company_fee_amount INT,
+    ADD COLUMN company_fee_statement_date TIMESTAMP;
+
+ALTER TABLE incident
+    DROP COLUMN IF EXISTS description,
+    DROP COLUMN IF EXISTS incident_type,
+    DROP COLUMN IF EXISTS incident_date,
+    DROP COLUMN IF EXISTS invoice_amount,
+    DROP COLUMN IF EXISTS invoice_date,
+    DROP COLUMN IF EXISTS closure_date;
+
+-- 1. incident_equip_damage
+CREATE TABLE incident_equip_damage (
+    incid_equip_id SERIAL PRIMARY KEY,
+    incid_equip_name TEXT NOT NULL
+);
+
+-- 2. incident_equip_damage_relationship
+CREATE TABLE incident_equip_damage_relationship (
+    incid_equip_relation_id SERIAL PRIMARY KEY,
+    incid_equip_id INT NOT NULL REFERENCES incident_equip_damage(incid_equip_id) ON DELETE CASCADE,
+    incident_id INT NOT NULL REFERENCES incident(incident_id) ON DELETE CASCADE
+);
+
+-- 3. incident_type
+CREATE TABLE incident_type (
+    incid_type_id SERIAL PRIMARY KEY,
+    incid_type_name TEXT NOT NULL
+);
+
+-- 4. incident_type_incident_relationship
+CREATE TABLE incident_type_incident_relationship (
+    incidentype_incid_rel_id SERIAL PRIMARY KEY,
+    incid_type_id INT NOT NULL REFERENCES incident_type(incid_type_id) ON DELETE CASCADE,
+    incident_id INT NOT NULL REFERENCES incident(incident_id) ON DELETE CASCADE
+);
+
+-- 5. incident_doc
+CREATE TABLE incident_doc (
+    incident_doc_id SERIAL PRIMARY KEY,
+    doc_type_id INT NOT NULL,
+    doc_number TEXT NOT NULL,
+    incident_id INT NOT NULL REFERENCES incident(incident_id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+
+-- 1. Remove the old column
+ALTER TABLE accident
+DROP COLUMN IF EXISTS accident_occure_date;
+
+-- 2. Add new columns
+ALTER TABLE accident
+ADD COLUMN driver_fault CHAR(1) CHECK (driver_fault IN ('Y', 'N')) NOT NULL DEFAULT 'N',
+ADD COLUMN alcohol_test CHAR(1) CHECK (alcohol_test IN ('Y', 'N')) NOT NULL DEFAULT 'N',
+ADD COLUMN drug_test_date_time TIMESTAMP NULL,
+ADD COLUMN alcohol_test_date_time TIMESTAMP NULL;
+
+ALTER TABLE accident_doc
+ADD COLUMN doc_number TEXT NOT NULL DEFAULT '';
+
+-- 1. Drop accident_id column
+ALTER TABLE claim
+DROP COLUMN IF EXISTS accident_id;
+
+-- 2. Add event_id column
+ALTER TABLE claim
+ADD COLUMN event_id INT;
+
+ALTER TABLE claim
+ALTER COLUMN event_id SET NOT NULL,
+ADD CONSTRAINT fk_claim_event FOREIGN KEY (event_id) REFERENCES performance_event(event_id) ON DELETE CASCADE;
+
+-- 1. Drop the `company_fee` column
+ALTER TABLE unit_ticket
+DROP COLUMN IF EXISTS company_fee;
+
+-- 2. Change the `status` column data type to varchar
+ALTER TABLE unit_ticket
+ALTER COLUMN status TYPE VARCHAR;
+
+ALTER TABLE ticket_doc
+ADD COLUMN doc_number TEXT NOT NULL DEFAULT '';
+
+
+-- 1. Remove old columns
+ALTER TABLE violation
+DROP COLUMN IF EXISTS penalty_points,
+DROP COLUMN IF EXISTS fine_amount;
+
+-- 2. Add new columns
+ALTER TABLE violation
+ADD COLUMN unit INTEGER NOT NULL DEFAULT 1,
+ADD COLUMN oos VARCHAR(3) NOT NULL DEFAULT 'No';
+
+
+CREATE TABLE ticket_pictures (
+    picture_id SERIAL PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES unit_ticket(ticket_id) ON DELETE CASCADE,
+    picture_url TEXT NOT NULL,
+    upload_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- Create status enum
+CREATE TYPE doc_inspection_status_enum AS ENUM ('violation', 'clean');
+
+-- Create inspection_level enum
+CREATE TYPE inspection_level_enum AS ENUM ('1', '2', '3');
+
+-- Create citation enum
+CREATE TYPE citation_enum AS ENUM ('yes', 'no', 'w');
+
+CREATE TABLE doc_inspection (
+    doc_inspection_id SERIAL PRIMARY KEY,
+    status doc_inspection_status_enum NOT NULL,
+    inspection_level inspection_level_enum NOT NULL,
+    citation citation_enum NOT NULL,
+    event_id INTEGER NOT NULL REFERENCES performance_event(event_id) ON DELETE CASCADE
+);
+
+
+CREATE TABLE doc_inspection_violation (
+    doc_inspection_violation_id SERIAL PRIMARY KEY,
+    doc_inspection_id INTEGER NOT NULL REFERENCES doc_inspection(doc_inspection_id) ON DELETE CASCADE,
+    violation_id INTEGER NOT NULL REFERENCES violation(violation_id) ON DELETE CASCADE,
+    violation_date TIMESTAMP NOT NULL
+);
+
+
+CREATE TABLE doc_inspection_documents (
+    inspection_doc_id SERIAL PRIMARY KEY,
+    doc_type_id INTEGER NOT NULL,
+    doc_inspection_id INTEGER NOT NULL REFERENCES doc_inspection(doc_inspection_id) ON DELETE CASCADE,
+    doc_number VARCHAR(255),
+    path VARCHAR(500),
+    status VARCHAR(100)
+);
+
+
+CREATE TABLE warning (
+    warning_id SERIAL PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES performance_event(event_id) ON DELETE CASCADE
+);
+
+
+CREATE TABLE warning_violation (
+    warning_violation_id SERIAL PRIMARY KEY,
+    warning_id INTEGER NOT NULL REFERENCES warning(warning_id) ON DELETE CASCADE,
+    violation_id INTEGER NOT NULL REFERENCES violation(violation_id) ON DELETE CASCADE,
+    violation_date TIMESTAMP NOT NULL
+);
+
+
+CREATE TABLE warning_documents (
+    warning_doc_id SERIAL PRIMARY KEY,
+    doc_type_id INTEGER NOT NULL,
+    warning_id INTEGER NOT NULL REFERENCES warning(warning_id) ON DELETE CASCADE,
+    doc_number VARCHAR(255),
+    path TEXT,
+    status VARCHAR(100)
+);
+
+
+ALTER TYPE doc_type_enum ADD VALUE 'incident_doc';
+ALTER TYPE doc_type_enum ADD VALUE 'dot_inspection_doc';
+ALTER TYPE doc_type_enum ADD VALUE 'warning_doc';
+
+INSERT INTO document_type (doc_type_id, doc_name, doc_cat, doc_type, company_id) VALUES 
+(28, 'Incident Doc', 'standard', 'incident_doc', NULL),
+(29, 'Dot Inspection Doc', 'standard', 'dot_inspection_doc', NULL),
+(30, 'Warning Doc', 'standard', 'warning_doc', NULL);
+
+INSERT INTO incident_type (incid_type_id, incid_type_name) VALUES (1, 'Claim'), (2, 'Towing'), (3, 'Unlawful Parking'), (4, 'Equip Damage');
+
+INSERT INTO incident_equip_damage (incid_equip_id, incid_equip_name) VALUES (1, 'Tyre'), (2, 'Body'), (3, 'Interior'); 
+
+UPDATE component SET component_name = 'Oversight', component_tab_name = 'Oversight' WHERE component_id = 7; 
+
+INSERT INTO component (component_id, module_id, component_name, component_tab_name, order_no) 
+VALUES (11, 1, 'Order', 'Order', 1), (12, 1, 'Client', 'Client', 2), (13, 1, 'Load Board', 'Load Board', 3); 
+
+
+insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) values (21, 7, 1, 2) 
+
+update performance_event set authority = 'dot' 
+update performance_event set company_fee_amount = '100' 
+update performance_event set company_fee_applied = false
+update performance_event set description = 'None'
+update performance_event set event_fees = 1000
+update performance_event set fees_paid_by = 'company'
+update performance_event set location = 'arizona'
+update performance_event set trailer_id = 2
+update performance_event set load_id = 0
+
+
+ALTER TABLE doc_inspection
+ALTER COLUMN citation TYPE citation_enum USING citation::citation_enum;
+
+
+ALTER TYPE inspection_level_enum RENAME VALUE '1' TO 'one';
+ALTER TYPE inspection_level_enum RENAME VALUE '2' TO 'two';
+ALTER TYPE inspection_level_enum RENAME VALUE '3' TO 'three';
+
+
+ALTER TABLE vehicle
+ALTER COLUMN plate_number TYPE varchar
+USING plate_number::varchar;
+
+ALTER TABLE accident ADD COLUMN driver_fault_temp boolean;
+ALTER TABLE accident ADD COLUMN alcohol_test_temp boolean;
+
+UPDATE accident
+SET driver_fault_temp = CASE
+    WHEN driver_fault = 'Y' THEN true
+    ELSE false
+END;
+
+UPDATE accident
+SET alcohol_test_temp = CASE
+    WHEN alcohol_test = 'Y' THEN true
+    ELSE false
+END;
+
+
+ALTER TABLE accident DROP COLUMN driver_fault;
+ALTER TABLE accident DROP COLUMN alcohol_test;
+
+ALTER TABLE accident RENAME COLUMN driver_fault_temp TO driver_fault;
+ALTER TABLE accident RENAME COLUMN alcohol_test_temp TO alcohol_test;
+
+ALTER TABLE accident
+ALTER COLUMN driver_fault SET NOT NULL,
+ALTER COLUMN alcohol_test SET NOT NULL;
+
+ALTER TYPE inspection_level_enum RENAME VALUE 'one' TO '1';
+ALTER TYPE inspection_level_enum RENAME VALUE 'two' TO '2';
+ALTER TYPE inspection_level_enum RENAME VALUE 'three' TO '3';
+
+-- Step 1: Add a temporary column of type INTEGER
+ALTER TABLE dot_inspection ADD COLUMN inspection_level_int INTEGER;
+
+-- Step 2: Map enum values to integers
+UPDATE dot_inspection
+SET inspection_level_int =
+    CASE inspection_level
+        WHEN '1' THEN 1
+        WHEN '2' THEN 2
+        WHEN '3' THEN 3
+        ELSE NULL
+    END;
+
+-- Step 3: Drop the old enum column
+ALTER TABLE dot_inspection DROP COLUMN inspection_level;
+
+-- Step 4: Rename the new column to match the old name
+ALTER TABLE dot_inspection RENAME COLUMN inspection_level_int TO inspection_level;
+
+ALTER TABLE accident
+ADD CONSTRAINT fk_accident_ticket
+FOREIGN KEY (ticket_id) REFERENCES unit_ticket(ticket_id)
+ON UPDATE CASCADE
+ON DELETE SET NULL;
+
+
+
+
+-- Component ID = 5 → Profile → General
+UPDATE component
+SET component_name = 'General',
+    component_tab_name = 'General'
+WHERE component_id = 5;
+
+-- Component ID = 4 → Payment → Subscription
+UPDATE component
+SET component_name = 'Subscription',
+    component_tab_name = 'Subscription'
+WHERE component_id = 4;
+
+
+
+-- Delete Documents component (component_id = 2)
+DELETE FROM component
+WHERE component_id = 2;
+
+-- Delete Load Board component (component_id = 13)
+DELETE FROM component
+WHERE component_id = 13
+  AND component_name = 'Load Board'
+  AND component_tab_name = 'Load Board'
+  AND order_no = 3;
+
+
+
+INSERT INTO module (module_id, module_name, tab_name, company_type_access)
+VALUES (8, 'Load Board', 'Load Board', '1'::company_type_access)
+
+
+
+INSERT INTO component (component_id, module_id, component_name, component_tab_name, order_no)
+VALUES
+(13, 7, 'User_Setting', 'User_Setting', 1),
+(14, 7, 'Notifications', 'Notifications', 2),
+(15, 7, 'Integration', 'Integration', 3),
+(16, 7, 'AI Agents', 'AI Agents', 8);
+
+
+
+INSERT INTO component (component_id, module_id, component_name, component_tab_name, order_no)
+VALUES
+(17, 8, 'LoadBoard', 'LoadBoard', 1),
+(18, 8, 'Calls', 'Calls', 2);
+
+
+update component set order_no = 4 where component_name = 'General';
+update component set order_no = 5 where component_name = 'User';
+update component set order_no = 6 where component_name = 'Role';
+update component set order_no = 7 where component_name = 'Subscription';
+
+
+
+ALTER TABLE company
+ADD COLUMN tax_id VARCHAR(100) NULL,
+ADD COLUMN dot_number VARCHAR(100) NULL,
+ADD COLUMN logo VARCHAR(255) NULL,
+ADD COLUMN fleet_size INTEGER NULL,
+ADD COLUMN eld VARCHAR(100) NULL;
+
+CREATE TABLE send_email (
+  id            SERIAL PRIMARY KEY,
+  send_to       VARCHAR(320) NOT NULL,
+  subject       VARCHAR(255) NOT NULL,
+  status        VARCHAR(16)  NOT NULL CHECK (status IN ('queued','sent','failed')),
+  created_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
+  sent_at       TIMESTAMP    NULL,
+  error_message TEXT         NULL
+);
+
+ALTER TABLE company
+ADD COLUMN twilio_number VARCHAR(20);
+
+(Optional)
+UPDATE company 
+SET twilio_number = '+10000000000'
+WHERE twilio_number IS NULL;
+
+
+CREATE TABLE default_integrations (
+    default_integration_id SERIAL PRIMARY KEY,
+    integration_name VARCHAR(100) NOT NULL,
+    integration_cat VARCHAR(50),
+    integration_description TEXT,
+    logo_path TEXT
+);
+
+INSERT INTO default_integrations (integration_name, integration_cat, integration_description, logo_path) VALUES
+('QuickBooks', 'Accounting', 'QuickBooks Accounting Integration', 'http://116.203.191.120/Documents/General_Documents/quickbooklogo.png'),
+('RMIS', 'Compliance', 'RMIS Compliance Integration', NULL),
+('TruckStop', 'Loadboard', 'TruckStop Loadboard Integration', NULL),
+('DAT', 'Loadboard', 'DAT Loadboard Integration', NULL),
+('Samsara', 'Telematics', 'Samsara Integration', NULL);
+
+CREATE TABLE integrations (
+    integration_id SERIAL PRIMARY KEY,
+    default_integration_id INT REFERENCES default_integrations(default_integration_id),
+    company_id INT NOT NULL REFERENCES company(company_id),
+    integration_status VARCHAR(20) DEFAULT 'inactive' CHECK (integration_status IN ('inactive','pending','active')),
+    credentials JSONB,
+    extra_config JSONB,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (default_integration_id, company_id)
+);
+
+INSERT INTO integrations (
+    default_integration_id,
+    company_id,
+    integration_status,
+    credentials,
+    extra_config
+)
+VALUES
+    (1, 59, 'inactive', '{}'::jsonb, '{}'::jsonb),
+    (2, 59, 'pending', '{"api_key": "xyz789", "username": "truckstop_user"}'::jsonb, '{"region": "EU", "version": "2.0"}'::jsonb),
+    (3, 59, 'inactive', '{}'::jsonb, '{}'::jsonb);
+
+CREATE TABLE global_integration_credentials (
+    global_integration_id SERIAL PRIMARY KEY,
+    default_integration_id INT REFERENCES default_integrations(default_integration_id),
+    credential_name VARCHAR(100) NOT NULL,
+    credential_value TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+INSERT INTO global_integration_credentials (default_integration_id, credential_name, credential_value) VALUES
+((SELECT default_integration_id FROM default_integrations WHERE integration_name='TruckStop'), 'Truckstop_IntegrationID', '620506');
+
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (15, 1, 1);
+
+CREATE TABLE agent (
+    agent_id SERIAL PRIMARY KEY,
+    company_id INT REFERENCES company(company_id),
+    agent_type VARCHAR(50)
+);
+
+CREATE TABLE call (
+    call_id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(user_id),
+    broker_number VARCHAR(20),
+    is_broker_already_registered BOOLEAN,
+    status_of_call VARCHAR(20) CHECK (status_of_call IN ('success', 'failure', 'pending')),
+    call_timestamp TIMESTAMP,
+    load_id INT,
+    caller_id VARCHAR(100),
+    company_id INT REFERENCES company(company_id)
+);
+
+CREATE TABLE call_confirm_data (
+    call_confirm_data_id SERIAL PRIMARY KEY,
+    call_id INT REFERENCES call(call_id),
+    pickup_time TIMESTAMP,
+    delivery_time TIMESTAMP,
+    trip_mile DECIMAL(10,2),
+    rate_per_mile DECIMAL(10,2),
+    final_rate DECIMAL(10,2),
+    origin VARCHAR(255),
+    destination VARCHAR(255)
+);
+
+CREATE TABLE call_sentiment (
+    call_sentiment_id SERIAL PRIMARY KEY,
+    call_id INT REFERENCES call(call_id),
+    sentiment VARCHAR(50)
+);
+
+CREATE TABLE call_summary_bullets (
+    bullet_id SERIAL PRIMARY KEY,
+    call_id INT REFERENCES call(call_id),
+    timestamp TIMESTAMP,
+    text TEXT
+);
+
+CREATE TABLE call_transcript (
+    transcript_id SERIAL PRIMARY KEY,
+    call_id INT REFERENCES call(call_id),
+    speaker VARCHAR(50) CHECK (speaker IN ('bot', 'broker')),
+    text TEXT,
+    timestamp TIMESTAMP
+);
+
+ALTER TABLE call
+ADD COLUMN match_id INT,
+ADD COLUMN truckstop_id INT,
+ADD COLUMN loadboard_type VARCHAR(20) CHECK (loadboard_type IN ('dat','truckstop')),
+ADD COLUMN broker_company VARCHAR(255);
+
+
+// Need to run on server
+
+update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/rmis.png'
+where integration_name = 'RMIS';
+
+update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/truckstop.png'
+where integration_name = 'TruckStop';
+
+update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/dat.png'
+where integration_name = 'DAT';
+
+update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/samsara.png'
+where integration_name = 'Samsara';
+
+//
+
+
+INSERT INTO role_module_relationship (role_id, module_id, access_level)
+VALUES
+    (1, 8, 2)
+
+INSERT INTO role_module_relationship (role_id, module_id, access_level)
+VALUES
+    (1, 8, 1);
+
+insert into role_component_relationship (component_id, role_id, access_level) 
+values (17, 1, 1);
+
+UPDATE integrations SET credentials = '{"api_key": "xyz789", "username": "truckstop_user"}'::jsonb WHERE integration_id = 1;
+
+UPDATE integrations SET extra_config =  '{"region": "EU", "version": "2.0"}'::jsonb WHERE integration_id = 1;
+
+UPDATE integrations SET integration_status = 'active' where integration_id = 1;
+
+UPDATE integrations SET default_integration_id = 3 where integration_id = 1;
+
+
+UPDATE integrations SET credentials = '{"api_key": "xyz789", "username": "dat_user"}'::jsonb WHERE integration_id = 2;
+
+UPDATE integrations SET extra_config =  '{"region": "EU", "version": "2.0"}'::jsonb WHERE integration_id = 2;
+
+UPDATE integrations SET integration_status = 'active' where integration_id = 2;
+
+UPDATE integrations SET default_integration_id = 5 where integration_id = 3;
+
+UPDATE integrations SET default_integration_id = 4 where integration_id = 2;
+
+
+UPDATE integrations SET credentials = '{"username": "OmmoTechTestWS", "password": "F5_aa48b!acy"}'::jsonb
+WHERE integration_id = 1;
+
+UPDATE integrations SET credentials = '{"username": "info@ommo.ai", "password": "Info@ommo$$$$$2025", "email": "sarwaich@ommo.ai"}'::jsonb
+WHERE integration_id = 2;
+
+insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) 
+values (220, 15, 1, 2);
+
+ALTER TABLE integrations
+ADD COLUMN requested_by_email VARCHAR(255);
+
+CREATE TABLE integration_email_process (
+  id SERIAL PRIMARY KEY,
+  message_id TEXT NOT NULL UNIQUE,
+  processed_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+INSERT INTO role_module_relationship (role_module_relationship_id, role_id, module_id, access_level)
+VALUES (258, 1, 8, 1);
+
+insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) 
+values (221, 18, 1, 1);
+
+INSERT INTO call (user_id, broker_number, is_broker_already_registered, status_of_call, call_timestamp, load_id, caller_id, company_id, match_id, truckstop_id, loadboard_type, broker_company) VALUES
+(247, 'BRK12345', TRUE,  'success', NOW() - INTERVAL '30 hours', 501, 'caller_001', 59, 201, 1001, 'dat', 'ABC Logistics'),
+(247, 'BRK67890', FALSE, 'failure', NOW() - INTERVAL '5 hours', 502, 'caller_002', 59, 202, 1002, 'truckstop', 'XYZ Freight'),
+(247, 'BRK54321', TRUE,  'pending', NOW() - INTERVAL '10 hours',503, 'caller_003', 59, 203, 1003, 'dat', 'Global Transport'),
+(247, 'BRK98765', FALSE, 'success', NOW() - INTERVAL '20 hours',504, 'caller_004', 59, 204, 1004, 'truckstop', 'FastLane Brokers');
+ 
