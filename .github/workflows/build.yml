@@ -29,9 +29,6 @@ jobs:
       # - name: Run tests
       #   run: dotnet test OmmoBackend.sln --no-build --verbosity normal
 
-      - name: Run tests (temporarily skipped)
-        run: echo "Skipping tests temporarily"
-
       - name: Publish
         run: dotnet publish -c Release -o ./publish
 
