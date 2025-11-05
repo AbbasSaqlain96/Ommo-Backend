@@ -11,23 +11,22 @@ using OmmoBackend.Data;
 using OmmoBackend.Exceptions;
 using OmmoBackend.Helpers;
 using OmmoBackend.Helpers.Enums;
-using OmmoBackend.Helpers.Utilities;
 using OmmoBackend.Hubs;
 using OmmoBackend.Middlewares;
-using OmmoBackend.Models;
 using OmmoBackend.Repositories.Implementations;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Implementations;
 using OmmoBackend.Services.Interfaces;
 using OmmoBackend.Validators;
+using OpenTelemetry.Metrics;
 using Serilog;
-using System.Reflection.Metadata;
 using System.Security.Claims;
 using System.Text;
 
+
 var builder = WebApplication.CreateBuilder(args); // Create a builder for configuring the web application
 
-var logPath = builder.Configuration["Logging:LogPath"] ?? "Logs";
+var logPath = builder.Configuration["Logging:LogPath"] ?? Path.Combine(builder.Environment.ContentRootPath, "Logs");
 
 if (!Directory.Exists(logPath))
     Directory.CreateDirectory(logPath);
@@ -94,6 +93,15 @@ builder.Services.AddSwaggerGen(option =>
         }
     });
 });
+
+// Add OpenTelemetry here
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics.AddAspNetCoreInstrumentation()
+               .AddHttpClientInstrumentation()
+                .AddPrometheusExporter();
+    });
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(
@@ -287,6 +295,11 @@ builder.Services.AddAuthentication(options =>
 
 var app = builder.Build(); // Build the web application
 
+
+// Expose Prometheus scraping endpoint at /metrics
+app.MapPrometheusScrapingEndpoint();
+
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -296,46 +309,64 @@ if (app.Environment.IsDevelopment())
 app.UseSwagger(); // Enable Swagger
 app.UseSwaggerUI(); // Enable Swagger
 
-//var contentRoot = builder.Environment.ContentRootPath;
+var contentRoot = builder.Environment.ContentRootPath;
 
-//app.UseStaticFiles(new StaticFileOptions
-//{
+// List of static folders you want to serve
+string[] staticDirs = { "ProfilePicture", "Documents", "Logo" };
+
+foreach (var dir in staticDirs)
+{
+    var fullPath = Path.Combine(contentRoot, dir);
+
+    // Ensure directory exists
+    if (!Directory.Exists(fullPath))
+        Directory.CreateDirectory(fullPath);
+
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new PhysicalFileProvider(fullPath),
+        RequestPath = "/" + dir
+    });
+}
+
+// app.UseStaticFiles(new StaticFileOptions
+// {
 //    FileProvider = new PhysicalFileProvider(Path.Combine(contentRoot, "ProfilePicture")),
 //    RequestPath = "/ProfilePicture"
-//});
+// });
 
-//app.UseStaticFiles(new StaticFileOptions
-//{
+// app.UseStaticFiles(new StaticFileOptions
+// {
 //    FileProvider = new PhysicalFileProvider(Path.Combine(contentRoot, "Documents")),
 //    RequestPath = "/Documents"
-//});
+// });
 
-//app.UseStaticFiles(new StaticFileOptions
-//{
+// app.UseStaticFiles(new StaticFileOptions
+// {
 //    FileProvider = new PhysicalFileProvider(Path.Combine(contentRoot, "Logo")),
 //    RequestPath = "/Logo"
-//});
+// });
 
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/ProfilePicture"),
-    //FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/ProfilePicture"),
-    RequestPath = "/ProfilePicture"
-});
+// app.UseStaticFiles(new StaticFileOptions
+// {
+//     //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/ProfilePicture"),
+//     FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/ProfilePicture"),
+//     RequestPath = "/ProfilePicture"
+// });
 
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Documents"),
-    //FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Documents"),
-    RequestPath = "/Documents"
-});
+// app.UseStaticFiles(new StaticFileOptions
+// {
+//     //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Documents"),
+//     FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Documents"),
+//     RequestPath = "/Documents"
+// });
 
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Logo"),
-    //FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Logo"),
-    RequestPath = "/Logo"
-});
+// app.UseStaticFiles(new StaticFileOptions
+// {
+//     //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Logo"),
+//     FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Logo"),
+//     RequestPath = "/Logo"
+// });
 
 app.UseSerilogRequestLogging(); // Log HTTP requests
 

@@ -8,6 +8,7 @@ obj/
 *.rsuser
 *.userosscache
 *.sln.docstates
+*.env
 
 # Auto-generated files
 *.vs/
