@@ -30,7 +30,7 @@ jobs:
 
       # ✅ Publish into a temporary folder (safe build)
       - name: Publish
-        run: dotnet publish OmmoBackend.sln -c Release -o ./artifacts
+        run: dotnet publish -c Release -o ./artifacts
 
       # ✅ Step 1: Backup existing deployment
       - name: Backup existing deployment
