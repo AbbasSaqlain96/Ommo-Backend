@@ -104,6 +104,8 @@ namespace OmmoBackend.Data
         public DbSet<SendEmail> send_email { get; set; }
 
         public DbSet<Agent> agent { get; set; }
+
+        public DbSet<AgentSettings> agent_settings { get; set; }
         public DbSet<Call> call { get; set; }
         public DbSet<CallTranscript> call_transcript { get; set; }
 

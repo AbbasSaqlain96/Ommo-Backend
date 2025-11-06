@@ -34,7 +34,7 @@ namespace OmmoBackend.Services.Implementations
             {
                 var loadboards = await _integrationRepository.GetActiveIntegrationsAsync(companyId);
                 if (loadboards == null || loadboards.Count == 0)
-                    return new ServiceResponse<List<NormalizedLoadDto>> { Success = false, Message = "No active loadboard integration available" };
+                    return new ServiceResponse<List<NormalizedLoadDto>> { Success = false, ErrorMessage = "No active loadboard integration available" };
 
                 var results = new List<NormalizedLoadDto>();
 

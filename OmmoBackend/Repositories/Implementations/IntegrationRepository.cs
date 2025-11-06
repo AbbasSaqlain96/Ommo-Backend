@@ -129,5 +129,16 @@ namespace OmmoBackend.Repositories.Implementations
             _dbContext.send_email.Add(email);
             await _dbContext.SaveChangesAsync();
         }
+
+        public async Task<Integrations> GetByIdAsync(int id)
+        {
+            return await _dbContext.integrations.FirstOrDefaultAsync(i => i.integration_id == id);
+        }
+
+        public async Task UpdateAsync(Integrations integration)
+        {
+            _dbContext.integrations.Update(integration);
+            await _dbContext.SaveChangesAsync();
+        }
     }
 }

@@ -82,6 +82,8 @@ namespace OmmoBackend.Middlewares
             ("/api/loadboard/get-loads", "Load Board", "LoadBoard", 1),
             ("/api/integration/send-integration-request", "Setting", "Integration", 2),
             ("/api/call/get-called-loads", "Load Board", "Calls", 1),
+            ("/api/aiagent/outbound", "Load Board", "LoadBoard", 1),
+            ("/api/integration/toggle-integration-status", "Setting", "Integration", 1)
         };
 
         private string JwtSecretKey => _configuration["Jwt:Key"];

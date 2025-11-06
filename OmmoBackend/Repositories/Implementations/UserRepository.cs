@@ -299,6 +299,7 @@ namespace OmmoBackend.Repositories.Implementations
             var user = await _dbContext.users.FindAsync(userId);
             if (user == null) return false;
 
+            user.user_name = updateDto.Username ?? user.user_name;
             user.user_email = updateDto.Email ?? user.user_email;
             user.phone = updateDto.Phone ?? user.phone;
             user.role_id = updateDto.Role ?? user.role_id;

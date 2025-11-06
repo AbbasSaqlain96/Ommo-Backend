@@ -68,7 +68,7 @@ namespace OmmoBackend.Services.Implementations
                 await companyLogo.CopyToAsync(stream);
             }
 
-            return $"{serverUrl}/Logo/{companyId}/{fileName}";
+            return $"{serverUrl}/Logo/{fileName}";
         }
         private async Task<string> UploadUserProfilePicture(IFormFile userProfilePicture, int companyId, int userId)
         {

@@ -249,6 +249,15 @@ namespace OmmoBackend.Repositories.Implementations
             }
         }
 
+        public async Task<CompanyDialInfoDto?> GetCompanyDialInfoAsync(int companyId)
+        {
+
+            return await _dbContext.company
+            .AsNoTracking()
+            .Where(c => c.company_id == companyId)
+            .Select(c => new CompanyDialInfoDto(c.name, c.twilio_number ?? ""))
+            .FirstOrDefaultAsync();
+        }
         public async Task<CompanyProfileDto> GetCompanyProfileAsync(int companyId)
         {
             try

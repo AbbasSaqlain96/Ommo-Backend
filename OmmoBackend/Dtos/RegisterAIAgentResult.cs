@@ -3,7 +3,7 @@
     public class RegisterAIAgentResult
     {
         public bool Status { get; set; }
-        public int AgentId { get; set; }
+        public Guid AgentId { get; set; }
         public string TwilloNumber { get; set; }
     }
 }

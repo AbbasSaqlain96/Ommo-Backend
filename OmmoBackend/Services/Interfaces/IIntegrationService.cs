@@ -9,5 +9,6 @@ namespace OmmoBackend.Services.Interfaces
         Task<ServiceResponse<List<IntegrationDto>>> GetIntegrationsAsync(int companyId);
         Task<ServiceResponse<List<DefaultIntegrationDto>>> GetDefaultIntegrationsAsync(int companyId);
         Task<ServiceResponse<object>> SendIntegrationRequestAsync(int userId, int companyId, IntegrationRequestDto request);
+        Task<ServiceResponse<object>> ToggleStatusAsync(ToggleIntegrationStatusRequest request);
     }
 }

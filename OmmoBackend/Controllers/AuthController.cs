@@ -1,13 +1,15 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using OmmoBackend.Dtos;
 using OmmoBackend.Helpers.Constants;
 using OmmoBackend.Helpers.Responses;
 using OmmoBackend.Services.Interfaces;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Security.Claims;
+using System.Threading.Tasks;
 
 namespace OmmoBackend.Controllers
 {
@@ -17,16 +19,18 @@ namespace OmmoBackend.Controllers
     {
         private readonly IAuthService _authService;
         private readonly IUserService _userService;
+        private readonly ITokenValidationService _tokenValidator;
         private readonly ILogger<AuthController> _logger;
 
         /// <summary>
         /// Initializes a new instance of AuthController class with the specified auth service.
         /// </summary>
-        public AuthController(IAuthService authService, ILogger<AuthController> logger, IUserService userService)
+        public AuthController(IAuthService authService, ILogger<AuthController> logger, IUserService userService, ITokenValidationService tokenValidator)
         {
             _authService = authService;
             _logger = logger;
             _userService = userService;
+            _tokenValidator = tokenValidator;
         }
 
         [HttpPost("login")]
@@ -161,6 +165,39 @@ namespace OmmoBackend.Controllers
             return resp.Success
                 ? ApiResponse.Success(null, resp.Message)
                 : ApiResponse.Error(resp.ErrorMessage, resp.StatusCode); 
+        }
+
+        [HttpPost("authenticate")]
+        [AllowAnonymous]
+        [ApiExplorerSettings(IgnoreApi = true)]
+        public async Task<IActionResult> Authenticate([FromBody] AuthenticateRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Token))
+                return BadRequest(new AuthenticateErrorResponse { Message = "Token is required." }); // return api response
+
+            var (isValid, claims, errorMessage) = await _tokenValidator.ValidateTokenAsync(request.Token);
+
+            if (!isValid)
+            {
+                return Ok(new AuthenticateErrorResponse { Message = errorMessage ?? "Token invalid." });
+            }
+
+            // user_id claim extraction again - return as string to keep simple
+            var userId = claims?.FirstOrDefault(kvp => kvp.Key.Equals("user_id", StringComparison.OrdinalIgnoreCase)
+                                                      || kvp.Key.Equals("sub", StringComparison.OrdinalIgnoreCase)
+                                                      || kvp.Key.Equals(ClaimTypes.NameIdentifier, StringComparison.OrdinalIgnoreCase))
+                               .Value ?? string.Empty;
+
+            var companyId = claims?.FirstOrDefault(kvp => kvp.Key.Equals("company_id", StringComparison.OrdinalIgnoreCase)).Value;
+
+            var success = new AuthenticateSuccessResponse
+            {
+                UserId = userId,
+                CompanyId = companyId,
+                Claims = claims
+            };
+
+            return Ok(success);
         }
     }
 }

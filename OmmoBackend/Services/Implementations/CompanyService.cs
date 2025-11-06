@@ -306,6 +306,8 @@ namespace OmmoBackend.Services.Implementations
             };
         }
 
+        public Task<CompanyDialInfoDto?> GetCompanyDialInfoAsync(int companyId)
+          => _companyRepository.GetCompanyDialInfoAsync(companyId);
         public async Task<ServiceResponse<CompanyProfileDto>> GetCompanyProfileAsync(int companyId)
         {
             _logger.LogInformation("Fetching company profile for ID {CompanyId}.", companyId);
@@ -333,6 +335,8 @@ namespace OmmoBackend.Services.Implementations
                 _logger.LogError(ex, "Unexpected error retrieving company profile for ID {CompanyId}.");
                 return ServiceResponse<CompanyProfileDto>.ErrorResponse("Server is temporarily unavailable. Please try again later.", StatusCodes.Status503ServiceUnavailable);
             }
+
+
         }
 
         public async Task<ServiceResponse<CompanyProfileDto>> UpdateCompanyProfileAsync(int companyId, UpdateCompanyProfileDto updateDto)
@@ -464,7 +468,7 @@ namespace OmmoBackend.Services.Implementations
                 await logo.CopyToAsync(stream);
             }
 
-            return $"{serverUrl}/Logo/{companyId}/{fileName}";
+            return $"{serverUrl}/Logo/{fileName}";
         }
     }
 }

@@ -11,8 +11,10 @@ using OmmoBackend.Data;
 using OmmoBackend.Exceptions;
 using OmmoBackend.Helpers;
 using OmmoBackend.Helpers.Enums;
+using OmmoBackend.Helpers.Utilities;
 using OmmoBackend.Hubs;
 using OmmoBackend.Middlewares;
+using OmmoBackend.Models;
 using OmmoBackend.Repositories.Implementations;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Implementations;
@@ -20,13 +22,15 @@ using OmmoBackend.Services.Interfaces;
 using OmmoBackend.Validators;
 using OpenTelemetry.Metrics;
 using Serilog;
+using System.Reflection.Metadata;
 using System.Security.Claims;
 using System.Text;
 
 
 var builder = WebApplication.CreateBuilder(args); // Create a builder for configuring the web application
 
-var logPath = builder.Configuration["Logging:LogPath"] ?? Path.Combine(builder.Environment.ContentRootPath, "Logs");
+// var logPath = builder.Configuration["Logging:LogPath"] ?? Path.Combine(builder.Environment.ContentRootPath, "Logs");
+var logPath = builder.Configuration["Logging:LogPath"] ?? "Logs";
 
 if (!Directory.Exists(logPath))
     Directory.CreateDirectory(logPath);
@@ -51,6 +55,8 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
     options.SuppressModelStateInvalidFilter = true;
 });
+
+builder.Services.Configure<TokenValidationOptions>(builder.Configuration.GetSection("TokenValidation"));
 
 // Register FluentValidation with DI
 builder.Services.AddFluentValidation(fv =>
@@ -113,7 +119,12 @@ builder.Services.AddDbContext<AppDbContext>(options =>
                 maxRetryDelay: TimeSpan.FromSeconds(10),
                 errorCodesToAdd: null);
         }));
+// Needed for IHttpClientFactory
+builder.Services.AddHttpClient();
 
+var twilioSid = builder.Configuration["Twilio:AccountSid"];
+var twilioToken = builder.Configuration["Twilio:AuthToken"];
+Twilio.TwilioClient.Init(twilioSid, twilioToken);
 // Register custom exception handler and problem details services
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>(); // Add custom global exception handler
 builder.Services.AddProblemDetails(); // Add problem details middleware to handle HTTP errors
@@ -126,6 +137,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 builder.Services.AddScoped<ICarrierService, CarrierService>();
+builder.Services.AddScoped<ICallService, CallService>();
 builder.Services.AddScoped<IDriverService, DriverService>();
 builder.Services.AddScoped<ITabService, TabService>();
 builder.Services.AddScoped<ITrailerService, TrailerService>();
@@ -139,6 +151,8 @@ builder.Services.AddScoped<IOtpVerificationService, OtpVerificationService>();
 //builder.Services.AddScoped<IMaintenanceIssueService, MaintenanceIssueService>();
 builder.Services.AddScoped<IIssueTicketService, IssueTicketService>();
 builder.Services.AddScoped<IModuleService, ModuleService>();
+//builder.Services.AddScoped<IAIAgentService, AIAgentService>();
+//builder.Services.AddScoped<ICallTranscriptService, CallTranscriptService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<IRoleModuleService, RoleModuleService>();
 builder.Services.AddScoped<IAccidentDetailsService, AccidentDetailsService>();
@@ -158,12 +172,14 @@ builder.Services.AddScoped<IOnboardingService, OnboardingService>();
 builder.Services.AddScoped<IIntegrationService, IntegrationService>();
 builder.Services.AddScoped<ILoadBoardService, LoadBoardService>();
 builder.Services.AddScoped<ICallService, CallService>();
+builder.Services.AddScoped<ITokenValidationService, TokenValidationService>();
 
 builder.Services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
 
 builder.Services.AddScoped<ICompanyRepository, CompanyRepository>();
 builder.Services.AddScoped<ICarrierRepository, CarrierRepository>();
 builder.Services.AddScoped<IDispatchServiceRepository, DispatchServiceRepository>();
+builder.Services.AddScoped<IAIAgentRepository,AIAgentRepository>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IRoleRepository, RoleRepository>();
 builder.Services.AddScoped<IModuleRepository, ModuleRepository>();
@@ -309,25 +325,25 @@ if (app.Environment.IsDevelopment())
 app.UseSwagger(); // Enable Swagger
 app.UseSwaggerUI(); // Enable Swagger
 
-var contentRoot = builder.Environment.ContentRootPath;
+// var contentRoot = builder.Environment.ContentRootPath;
 
-// List of static folders you want to serve
-string[] staticDirs = { "ProfilePicture", "Documents", "Logo" };
+// // List of static folders you want to serve
+// string[] staticDirs = { "ProfilePicture", "Documents", "Logo" };
 
-foreach (var dir in staticDirs)
-{
-    var fullPath = Path.Combine(contentRoot, dir);
+// foreach (var dir in staticDirs)
+// {
+//     var fullPath = Path.Combine(contentRoot, dir);
 
-    // Ensure directory exists
-    if (!Directory.Exists(fullPath))
-        Directory.CreateDirectory(fullPath);
+//     // Ensure directory exists
+//     if (!Directory.Exists(fullPath))
+//         Directory.CreateDirectory(fullPath);
 
-    app.UseStaticFiles(new StaticFileOptions
-    {
-        FileProvider = new PhysicalFileProvider(fullPath),
-        RequestPath = "/" + dir
-    });
-}
+//     app.UseStaticFiles(new StaticFileOptions
+//     {
+//         FileProvider = new PhysicalFileProvider(fullPath),
+//         RequestPath = "/" + dir
+//     });
+// }
 
 // app.UseStaticFiles(new StaticFileOptions
 // {
@@ -347,26 +363,26 @@ foreach (var dir in staticDirs)
 //    RequestPath = "/Logo"
 // });
 
-// app.UseStaticFiles(new StaticFileOptions
-// {
-//     //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/ProfilePicture"),
-//     FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/ProfilePicture"),
-//     RequestPath = "/ProfilePicture"
-// });
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/ProfilePicture"),
+    // FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/ProfilePicture"),
+    RequestPath = "/ProfilePicture"
+});
 
-// app.UseStaticFiles(new StaticFileOptions
-// {
-//     //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Documents"),
-//     FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Documents"),
-//     RequestPath = "/Documents"
-// });
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Documents"),
+    // FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Documents"),
+    RequestPath = "/Documents"
+});
 
-// app.UseStaticFiles(new StaticFileOptions
-// {
-//     //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Logo"),
-//     FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Logo"),
-//     RequestPath = "/Logo"
-// });
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Logo"),
+    // FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Logo"),
+    RequestPath = "/Logo"
+});
 
 app.UseSerilogRequestLogging(); // Log HTTP requests
 

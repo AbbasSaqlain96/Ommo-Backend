@@ -1633,7 +1633,7 @@ CREATE TABLE default_integrations (
 );
 
 INSERT INTO default_integrations (integration_name, integration_cat, integration_description, logo_path) VALUES
-('QuickBooks', 'Accounting', 'QuickBooks Accounting Integration', 'http://116.203.191.120/Documents/General_Documents/quickbooklogo.png'),
+('QuickBooks', 'Accounting', 'QuickBooks Accounting Integration', 'https://ommo.ai/Documents/General_Documents/quickbooklogo.png'),
 ('RMIS', 'Compliance', 'RMIS Compliance Integration', NULL),
 ('TruckStop', 'Loadboard', 'TruckStop Loadboard Integration', NULL),
 ('DAT', 'Loadboard', 'DAT Loadboard Integration', NULL),
@@ -1736,22 +1736,20 @@ ADD COLUMN loadboard_type VARCHAR(20) CHECK (loadboard_type IN ('dat','truckstop
 ADD COLUMN broker_company VARCHAR(255);
 
 
-// Need to run on server
+update default_integrations set logo_path = 'https://ommo.ai/Documents/General_Documents/quickbooklogo.png'
+where integration_name = 'QuickBooks';
 
-update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/rmis.png'
+update default_integrations set logo_path = 'https://ommo.ai/Documents/General_Documents/rmis.png'
 where integration_name = 'RMIS';
 
-update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/truckstop.png'
+update default_integrations set logo_path = 'https://ommo.ai/Documents/General_Documents/truckstop.png'
 where integration_name = 'TruckStop';
 
-update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/dat.png'
+update default_integrations set logo_path = 'https://ommo.ai/Documents/General_Documents/dat.png'
 where integration_name = 'DAT';
 
-update default_integrations set logo_path = 'http://116.203.191.120/Documents/General_Documents/samsara.png'
+update default_integrations set logo_path = 'https://ommo.ai/Documents/General_Documents/samsara.png'
 where integration_name = 'Samsara';
-
-//
-
 
 INSERT INTO role_module_relationship (role_id, module_id, access_level)
 VALUES
@@ -1813,4 +1811,35 @@ INSERT INTO call (user_id, broker_number, is_broker_already_registered, status_o
 (247, 'BRK67890', FALSE, 'failure', NOW() - INTERVAL '5 hours', 502, 'caller_002', 59, 202, 1002, 'truckstop', 'XYZ Freight'),
 (247, 'BRK54321', TRUE,  'pending', NOW() - INTERVAL '10 hours',503, 'caller_003', 59, 203, 1003, 'dat', 'Global Transport'),
 (247, 'BRK98765', FALSE, 'success', NOW() - INTERVAL '20 hours',504, 'caller_004', 59, 204, 1004, 'truckstop', 'FastLane Brokers');
+
+
+INSERT INTO role_module_relationship (role_module_relationship_id, role_id, module_id, access_level)
+VALUES (259, 2, 7, 1);
+
+insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) 
+values (222, 1, 2, 2),
+(223, 3, 2, 2),
+(224, 4, 2, 2),
+(225, 5, 2, 2),
+(226, 17, 2, 1),
+(227, 13, 2, 2),
+(228, 14, 2, 2),
+(229, 16, 2, 2),
+(230, 15, 2, 1),
+(231, 18, 2, 1);
+
  
+
+insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) 
+values (232, 15, 2, 2);
+
+INSERT INTO role_module_relationship (role_module_relationship_id, role_id, module_id, access_level)
+VALUES (261, 2, 8, 1);
+
+
+
+INSERT INTO role_module_relationship (role_module_relationship_id, module_id, role_id, access_level)
+VALUES (262, 7, 1, 1);
+
+insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) 
+values (233, 15, 1, 2);

@@ -16,5 +16,7 @@ namespace OmmoBackend.Repositories.Interfaces
         Task MarkEmailProcessedAsync(string messageId);
         Task<bool> IsMessageProcessedAsync(string messageId);
         Task EnqueueSendEmailAsync(SendEmail email);
+        Task<Integrations> GetByIdAsync(int id);
+        Task UpdateAsync(Integrations integration);
     }
 }

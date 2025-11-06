@@ -60,7 +60,7 @@ namespace OmmoBackend.Services.Implementations
             return ServiceResponse<RegisterAIAgentResult>.SuccessResponse(new RegisterAIAgentResult()
             {
                 Status = true,
-                AgentId = savedAgent.agent_id,
+                AgentId = savedAgent.agent_guid,
                 TwilloNumber = twilioNumber
             });
         }

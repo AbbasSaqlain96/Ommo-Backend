@@ -15,6 +15,7 @@ namespace OmmoBackend.Services.Interfaces
         // Task<ChildCompanyRemovalResult> RemoveChildCompanyAsync(RemoveChildCompanyRequest removeChildCompanyRequest);
         Task<bool> CompanyIdExist(int companyId);
 
+        Task<CompanyDialInfoDto?> GetCompanyDialInfoAsync(int companyId);
         Task<DuplicateCheckResult> CheckDuplicateEmailAndPhoneAsync(string email, string phone);
 
         Task<ServiceResponse<CompanyProfileDto>> GetCompanyProfileAsync(int companyId);

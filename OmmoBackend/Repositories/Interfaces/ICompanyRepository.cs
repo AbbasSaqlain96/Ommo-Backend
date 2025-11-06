@@ -18,6 +18,8 @@ namespace OmmoBackend.Repositories.Interfaces
         Task<CompanyProfileDto> GetCompanyProfileAsync(int companyId);
 
         Task<bool> CheckCompanyExistsAsync(int? parentId);
+
+        Task<CompanyDialInfoDto?> GetCompanyDialInfoAsync(int companyId);
         Task<bool> ExistsAsync(int companyId);
     }
 }

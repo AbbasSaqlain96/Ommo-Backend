@@ -5,7 +5,7 @@ namespace OmmoBackend.Dtos
 {
     public class IntegrationRequestDto
     {
-        public string? ServiceEmailDAT { get; set; }
+        public string? ServiceEmail { get; set; }
 
         [Required]
         public LoadboardType Loadboard { get; set; }

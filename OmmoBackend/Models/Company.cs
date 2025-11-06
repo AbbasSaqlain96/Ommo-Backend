@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using System.Threading.Tasks;
 using OmmoBackend.Helpers.Enums;
@@ -42,8 +43,8 @@ namespace OmmoBackend.Models
         public DateTime created_at { get; set; } = DateTime.Now;
 
         [RegularExpression(@"^\+?[1-9]\d{1,14}$", ErrorMessage = "Invalid twillo number format.")]
-        public string twilio_number { get; set; }
-        
+        [Column("twilio_number")]
+        public string? twilio_number { get; set; }
         public string? tax_id { get; set; }
         public string? dot_number { get; set; }
         public string? logo { get; set; }
