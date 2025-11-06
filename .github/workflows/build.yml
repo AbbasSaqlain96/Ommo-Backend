@@ -29,7 +29,7 @@ jobs:
       #   run: dotnet test OmmoBackend.sln --no-build --verbosity normal
 
       - name: Publish
-        run: dotnet publish -c Release -o .
+        run: dotnet publish -c Release -o ./output
 
       # ✅ Step 1: Backup current app
       - name: Backup existing deployment
@@ -56,8 +56,8 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "./*"
-          target: "/var/www/ommo-backend-new"
+          source: "./output/*"
+          target: "/var/www/ommo-backend-new-temp"
 
       # ✅ Step 3: Replace only code files (preserve Logs, Logo, ProfilePicture, Documents, appsettings.json)
       - name: Replace old build while preserving data
@@ -68,6 +68,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             APP_DIR="/var/www/ommo-backend-new"
+            TEMP_DIR="/var/www/ommo-backend-new-temp"
 
             echo "Deploying new version to $APP_DIR while preserving important folders..."
 
