@@ -11,10 +11,8 @@ using OmmoBackend.Data;
 using OmmoBackend.Exceptions;
 using OmmoBackend.Helpers;
 using OmmoBackend.Helpers.Enums;
-using OmmoBackend.Helpers.Utilities;
 using OmmoBackend.Hubs;
 using OmmoBackend.Middlewares;
-using OmmoBackend.Models;
 using OmmoBackend.Repositories.Implementations;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Implementations;
@@ -22,7 +20,6 @@ using OmmoBackend.Services.Interfaces;
 using OmmoBackend.Validators;
 using OpenTelemetry.Metrics;
 using Serilog;
-using System.Reflection.Metadata;
 using System.Security.Claims;
 using System.Text;
 
