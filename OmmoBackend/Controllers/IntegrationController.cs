@@ -1,14 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using OmmoBackend.Dtos;
 using OmmoBackend.Helpers.Constants;
 using OmmoBackend.Helpers.Responses;
 using OmmoBackend.Helpers.Utilities;
-using OmmoBackend.Models;
 using OmmoBackend.Services.Interfaces;
-using Twilio.Http;
 
 namespace OmmoBackend.Controllers
 {
