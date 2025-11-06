@@ -3,7 +3,6 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ "main" ]
-  # Optional: remove below if not needed
   pull_request:
     branches: [ "main" ]
 
