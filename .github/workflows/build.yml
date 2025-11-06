@@ -28,10 +28,11 @@ jobs:
       # - name: Run tests
       #   run: dotnet test OmmoBackend.sln --no-build --verbosity normal
 
+      # ✅ Publish into a temporary folder (safe build)
       - name: Publish
-        run: dotnet publish -c Release -o ./output
+        run: dotnet publish OmmoBackend.sln -c Release -o ./artifacts
 
-      # ✅ Step 1: Backup current app
+      # ✅ Step 1: Backup existing deployment
       - name: Backup existing deployment
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -44,23 +45,23 @@ jobs:
             mkdir -p /var/www/backups
             if [ -d "$APP_DIR" ]; then
               cp -r "$APP_DIR" "$BACKUP_DIR"
-              echo "Backup created at $BACKUP_DIR"
+              echo "✅ Backup created at $BACKUP_DIR"
             else
-              echo "App directory not found; skipping backup."
+              echo "⚠️ No existing deployment found, skipping backup."
             fi
 
-      # ✅ Step 2: Upload new published files
+      # ✅ Step 2: Upload directly to /var/www/ommo-backend-new
       - name: Deploy to Server (via SCP)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "./output/*"
-          target: "/var/www/ommo-backend-new-temp"
+          source: "./artifacts/*"
+          target: "/var/www/ommo-backend-new"
 
-      # ✅ Step 3: Replace only code files (preserve Logs, Logo, ProfilePicture, Documents, appsettings.json)
-      - name: Replace old build while preserving data
+      # ✅ Step 3: Preserve data
+      - name: Cleanup and Preserve Data
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -68,26 +69,14 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             APP_DIR="/var/www/ommo-backend-new"
-            TEMP_DIR="/var/www/ommo-backend-new-temp"
+            echo "🧹 Cleaning up and preserving important folders..."
 
-            echo "Deploying new version to $APP_DIR while preserving important folders..."
-
-            # Create target dir if not exists
-            mkdir -p "$APP_DIR"
-
-            # Remove everything from APP_DIR except preserved folders/files
             find "$APP_DIR" -mindepth 1 ! -name 'Logs' ! -name 'Logo' ! -name 'ProfilePicture' ! -name 'Documents' ! -name 'appsettings.json' -exec rm -rf {} +
 
-            # Move new files from temp dir to app dir
-            cp -r "$TEMP_DIR"/* "$APP_DIR"
+            echo "✅ Preserved: Logs, Logo, ProfilePicture, Documents, appsettings.json"
 
-            # Cleanup temporary folder
-            rm -rf "$TEMP_DIR"
-
-            echo "Deployment completed. Preserved Logs, Logo, ProfilePicture, Documents, and appsettings.json."
-
-      # ✅ Step 4: Restart the service
-      - name: Restart Application (systemd)
+      # ✅ Step 4: Restart Application
+      - name: Restart Application
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -95,4 +84,4 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             sudo systemctl restart ommo-backend-new.service
-            echo "Service restarted successfully."
+            echo "🚀 Service restarted successfully."
