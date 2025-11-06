@@ -57,10 +57,11 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "artifacts/**"
+          source: "./artifacts/"
           target: "/var/www/ommo-backend-new"
-          strip_components: 1
           overwrite: true
+          strip_components: 0
+          recursive: true
 
       # ✅ Step 3: Preserve data
       - name: Cleanup and Preserve Data
