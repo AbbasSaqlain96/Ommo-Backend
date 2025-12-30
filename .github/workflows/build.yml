@@ -57,6 +57,15 @@ jobs:
               echo "⚠️ No existing deployment found, skipping backup."
             fi
 
+      - name: Prepare deployment directory
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            rm -rf /var/www/ommo-backend-new/*
+
       # ✅ Step 2: Upload directly to /var/www/ommo-backend-new
       - name: Deploy to Server (via SCP)
         uses: appleboy/scp-action@v0.1.7
@@ -75,8 +84,10 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            echo "Server directory contents:"
+            echo "Top-level:"
             ls -la /var/www/ommo-backend-new
+            echo "Recursive:"
+            find /var/www/ommo-backend-new -type f
 
       # ✅ Step 3: Restart Application
       - name: Restart Application
