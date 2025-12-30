@@ -66,6 +66,23 @@ jobs:
           script: |
             rm -rf /var/www/ommo-backend-new/*
 
+      - name: Prepare deployment directory (preserve important folders)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            APP_DIR="/var/www/ommo-backend-new"
+            echo "Cleaning deployment folder but preserving important data..."
+            find "$APP_DIR" -mindepth 1 ! -name 'Logs' \
+                          ! -name 'ProfilePicture' \
+                          ! -name 'Logo' \
+                          ! -name 'Documents' \
+                          ! -name 'appsettings.json' \
+                          -exec rm -rf {} +
+            echo "✅ Preserved: Logs, ProfilePicture, Logo, Documents, appsettings.json"
+
       # ✅ Step 2: Upload directly to /var/www/ommo-backend-new
       - name: Deploy to Server (via SCP)
         uses: appleboy/scp-action@v0.1.7
