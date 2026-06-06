@@ -1,18 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.Design;
-using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
-using OmmoBackend.Data;
 using OmmoBackend.Dtos;
 using OmmoBackend.Helpers.Enums;
 using OmmoBackend.Helpers.Responses;
@@ -20,9 +8,8 @@ using OmmoBackend.Helpers.Utilities;
 using OmmoBackend.Models;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Interfaces;
-using Twilio.Http;
-using Twilio.TwiML.Voice;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 
 namespace OmmoBackend.Services.Implementations
 {
@@ -41,6 +28,7 @@ namespace OmmoBackend.Services.Implementations
         private readonly IConfiguration _config;
         private readonly ISendEmailRepository _sendEmailRepository;
         private readonly ISystemClock _clock;
+        private readonly IBillingRepository _billingRepository;
 
         /// <summary>
         /// Initializes a new instance of the UserService class with the specified repositories.
@@ -57,7 +45,8 @@ namespace OmmoBackend.Services.Implementations
             IConfiguration config,
             ISendEmailRepository sendEmailRepository,
             ISystemClock clock,
-            IJwtTokenGenerator jwtTokenGenerator)
+            IJwtTokenGenerator jwtTokenGenerator,
+            IBillingRepository billingRepository)
         {
             _userRepository = userRepository;
             _roleRepository = roleRepository;
@@ -71,6 +60,7 @@ namespace OmmoBackend.Services.Implementations
             _sendEmailRepository = sendEmailRepository;
             _clock = clock;
             _jwtTokenGenerator = jwtTokenGenerator;
+            _billingRepository = billingRepository;
         }
 
 
@@ -171,6 +161,15 @@ namespace OmmoBackend.Services.Implementations
             {
                 _logger.LogInformation("Starting user creation process for email/phone");
 
+                var limitCheck = await CheckUserLimitAsync(companyId);
+
+                if (!limitCheck.Success)
+                {
+                    return ServiceResponse<UserCreationResult>.ErrorResponse(
+                        limitCheck.ErrorMessage!,
+                        limitCheck.StatusCode);
+                }
+
                 // Check if a user with the same email or phone already exists
                 var duplicateCheckResultForUserEntity = await CheckDuplicateEmailAndPhoneInUserAsync(createUserRequest.Email, createUserRequest.Phone);
                 if (duplicateCheckResultForUserEntity.HasDuplicate)
@@ -241,75 +240,121 @@ namespace OmmoBackend.Services.Implementations
             {
                 _logger.LogInformation("Updating user with ID: {UserId}", updateUserRequest.UserId);
 
-                // Check if the user exists
+                // Fetch user
                 var user = await _userRepository.GetByIdAsync(updateUserRequest.UserId);
 
                 if (user == null)
                 {
                     _logger.LogWarning("User with ID {UserId} not found", updateUserRequest.UserId);
-                    return ServiceResponse<UserUpdateResult>.ErrorResponse("Invalid User. The provided User ID does not exist", 400);
+                    return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                        "Invalid User. The provided User ID does not exist", 400);
                 }
 
-                // Validate the role id if provided
-                if (updateUserRequest.RoleId.HasValue)
+                // ROLE UPDATE (with protection + optimisation)
+                if (updateUserRequest.RoleId.HasValue && updateUserRequest.RoleId.Value != user.role_id)
                 {
                     var role = await _roleRepository.GetByIdAsync(updateUserRequest.RoleId.Value);
 
                     if (role == null)
                     {
-                        _logger.LogWarning("Invalid role ID: {RoleId} for user ID: {UserId}", updateUserRequest.RoleId.Value, updateUserRequest.UserId);
-                        return ServiceResponse<UserUpdateResult>.ErrorResponse("Invalid Role. The specified Role ID either does not exist", 400);
+                        _logger.LogWarning("Invalid role ID: {RoleId} for user ID: {UserId}",
+                            updateUserRequest.RoleId.Value, updateUserRequest.UserId);
+
+                        return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                            "Invalid Role. The specified Role ID either does not exist", 400);
                     }
 
-                    // Check if the role is not 'standard', and validate the company association
-                    if (!string.Equals(role.role_cat.ToString(), "standard", StringComparison.OrdinalIgnoreCase) && role.company_id != user.company_id)
+                    // Validate role belongs to same company (if not standard)
+                    if (!string.Equals(role.role_cat.ToString(), "standard", StringComparison.OrdinalIgnoreCase)
+                        && role.company_id != user.company_id)
                     {
-                        _logger.LogWarning("Role ID {RoleId} does not belong to the same company as user ID {UserId}", updateUserRequest.RoleId.Value, updateUserRequest.UserId);
-                        return ServiceResponse<UserUpdateResult>.ErrorResponse("Invalid Role. The specified Role ID either does not exist", 400);
+                        _logger.LogWarning("Role ID {RoleId} does not belong to the same company as user ID {UserId}",
+                            updateUserRequest.RoleId.Value, updateUserRequest.UserId);
+
+                        return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                            "Invalid Role. The specified Role ID either does not exist", 400);
                     }
+
+                    // Prevent primary user role change
+                    var companyEmail = await _companyRepository.GetCompanyEmailAsync(user.company_id);
+
+                    if (!string.IsNullOrWhiteSpace(companyEmail) &&
+                        string.Equals(user.user_email, companyEmail, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("Attempt to change role of primary user. UserId: {UserId}", user.user_id);
+
+                        return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                            "Role of the primary account owner cannot be changed.", 400);
+                    }
+
+                    _logger.LogDebug("Updating role ID for user ID: {UserId}", updateUserRequest.UserId);
+                    user.role_id = updateUserRequest.RoleId.Value;
                 }
 
+                // EMAIL UPDATE
                 if (!string.IsNullOrWhiteSpace(updateUserRequest.Email))
                 {
-                    bool emailExists = await _userRepository.CheckIfEmailExists(updateUserRequest.Email, updateUserRequest.UserId);
+                    // Prevent primary user email change
+                    var companyEmail = await _companyRepository.GetCompanyEmailAsync(user.company_id);
+
+                    if (!string.IsNullOrWhiteSpace(companyEmail) &&
+                        string.Equals(user.user_email, companyEmail, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(updateUserRequest.Email, user.user_email, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("Attempt to change email of primary user. UserId: {UserId}", user.user_id);
+
+                        return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                            "Primary account email cannot be changed.", 400);
+                    }
+
+                    // Existing duplicate check
+                    bool emailExists = await _userRepository.CheckIfEmailExists(
+                        updateUserRequest.Email, updateUserRequest.UserId);
+
                     if (emailExists)
-                        return ServiceResponse<UserUpdateResult>.ErrorResponse("User Update failed: A user with the same email associated with another user", 400);
+                        return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                            "User Update failed: A user with the same email associated with another user", 400);
 
                     user.user_email = updateUserRequest.Email;
                 }
 
+                // PHONE UPDATE
                 if (!string.IsNullOrWhiteSpace(updateUserRequest.Phone))
                 {
-                    bool phoneExists = await _userRepository.CheckIfPhoneExists(updateUserRequest.Phone, updateUserRequest.UserId);
+                    bool phoneExists = await _userRepository.CheckIfPhoneExists(
+                        updateUserRequest.Phone, updateUserRequest.UserId);
+
                     if (phoneExists)
-                        return ServiceResponse<UserUpdateResult>.ErrorResponse("User Update failed: A user with the same phone associated with another user", 400);
+                    {
+                        return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                            "User Update failed: A user with the same phone associated with another user", 400);
+                    }
 
                     user.phone = updateUserRequest.Phone;
                 }
 
-                // Update user fields if values are provided; ignore nulls
+                // USERNAME UPDATE
                 if (!string.IsNullOrWhiteSpace(updateUserRequest.Username))
                 {
                     _logger.LogDebug("Updating username for user ID: {UserId}", updateUserRequest.UserId);
                     user.user_name = updateUserRequest.Username;
                 }
 
-                if (updateUserRequest.RoleId.HasValue)
-                {
-                    _logger.LogDebug("Updating role ID for user ID: {UserId}", updateUserRequest.UserId);
-                    user.role_id = updateUserRequest.RoleId.Value;
-                }
-
-                // Update the user in the database
+                // SAVE
                 await _userRepository.UpdateAsync(user);
 
                 _logger.LogInformation("User with ID {UserId} updated successfully", updateUserRequest.UserId);
-                return ServiceResponse<UserUpdateResult>.SuccessResponse(new UserUpdateResult { Success = true }, "User updated successfully");
+
+                return ServiceResponse<UserUpdateResult>.SuccessResponse(
+                    new UserUpdateResult { Success = true },
+                    "User updated successfully"
+                );
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error while updating user.");
-                return ServiceResponse<UserUpdateResult>.ErrorResponse("Server is temporarily unavailable. Please try again later.", 503);
+                return ServiceResponse<UserUpdateResult>.ErrorResponse(
+                    "Server is temporarily unavailable. Please try again later.", 503);
             }
         }
 
@@ -869,6 +914,39 @@ namespace OmmoBackend.Services.Implementations
                 HasDuplicate = false,
                 Message = null
             };
+        }
+
+        private async Task<ServiceResponse<bool>> CheckUserLimitAsync(int companyId)
+        {
+            try
+            {
+                var data = await _billingRepository.GetUserPlanLimitAsync(companyId);
+
+                if (data == null)
+                {
+                    return ServiceResponse<bool>.ErrorResponse(
+                        "Subscription plan not found.", 404);
+                }
+
+                if (data.ActiveUsers >= data.AllowedUsers)
+                {
+                    return ServiceResponse<bool>.ErrorResponse(
+                        "You have already reached the maximum user limit for your plan.",
+                        403);
+                }
+
+                return ServiceResponse<bool>.SuccessResponse(true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Error while checking user limit for CompanyId: {CompanyId}",
+                    companyId);
+
+                return ServiceResponse<bool>.ErrorResponse(
+                    "Server is temporarily unavailable. Please try again later.",
+                    503);
+            }
         }
     }
 }

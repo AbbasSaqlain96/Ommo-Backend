@@ -9,15 +9,15 @@ namespace OmmoBackend.Dtos
         public string Destination { get; init; }
 
         // Deadhead Miles (DH-O / DH-D)
-        public int MaxOriginDeadheadMiles { get; init; } = 450;
-        public int MaxDestinationDeadheadMiles { get; init; } = 450;
+        public int MaxOriginDeadheadMiles { get; init; } = 100;
+        public int MaxDestinationDeadheadMiles { get; init; } = 100;
 
         // Availability Dates
         public DateTime? FromDate { get; init; }
         public DateTime? ToDate { get; init; }
 
-        // Age of posting (Minutes)
-        public int MaxAgeMinutes { get; init; } = 4320;
+        // Age of posting (Hours)
+        public int MaxAgeMinutes { get; init; } = 24;
 
         // Rate Per Mile
         public decimal? RPM { get; init; }

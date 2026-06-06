@@ -1,8 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace OmmoBackend.Models
 {
@@ -16,5 +12,7 @@ namespace OmmoBackend.Models
         public bool is_revoked { get; set; }
         public DateTime created_at { get; set; }
         public DateTime revoked_at { get; set; }
-    }
+        public bool is_used { get; set; } = false;
+        public DateTime used_at { get; set; }
+}
 }

@@ -14,5 +14,7 @@ namespace OmmoBackend.Dtos
         public bool IsNew { get; set; }
 
         public string? ExistingEmail { get; set; }
+
+        public bool IsOnboarding { get; set; } = false;
     }
 }

@@ -1,11 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using OmmoBackend.Data;
 using OmmoBackend.Exceptions;
-using OmmoBackend.Helpers.Constants;
 using OmmoBackend.Models;
 using OmmoBackend.Repositories.Interfaces;
 
@@ -41,59 +36,71 @@ namespace OmmoBackend.Repositories.Implementations
             }
         }
 
-        public async Task<RefreshToken?> GetRefreshTokenAsync(string refreshToken)
+        public async Task<RefreshToken?> ConsumeRefreshTokenAsync(string refreshToken)
         {
-            try
-            {
-                _logger.LogInformation("Fetching refresh token: {RefreshToken}", refreshToken);
+            var token = await _dbContext.refresh_tokens
+                .FirstOrDefaultAsync(rt => rt.refresh_token == refreshToken);
 
-                var token = await _dbContext.refresh_tokens
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(rt => rt.refresh_token == refreshToken && !rt.is_revoked);
+            if (token == null)
+                return null;
 
-                if (token == null)
-                {
-                    _logger.LogWarning("Refresh token not found or has been revoked: {RefreshToken}", refreshToken);
-                }
-                else
-                {
-                    _logger.LogInformation("Successfully retrieved refresh token: {RefreshToken}", refreshToken);
-                }
+            if (token.is_revoked || token.is_used)
+                return null;
 
-                return token;
-            }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogError(ex, "Error occurred while retrieving refresh token: {RefreshToken}", refreshToken);
-                throw new KeyNotFoundException("Refresh token not found or has been revoked.", ex);
-            }
+            if (token.expiration_time < DateTime.UtcNow)
+                return null;
+
+            // Mark as used + revoked (single logical step)
+            token.is_used = true;
+            token.used_at = DateTime.UtcNow;
+            token.is_revoked = true;
+            token.revoked_at = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+
+            return token;
         }
 
-        public async Task RevokeRefreshTokenAsync(string refreshToken)
+        public async Task<bool> RevokeRefreshTokenSafeAsync(string refreshToken)
         {
-            try
+            var token = await _dbContext.refresh_tokens
+                .FirstOrDefaultAsync(rt => rt.refresh_token == refreshToken);
+
+            if (token == null)
+                return false;
+
+            if (token.is_revoked)
+                return true; // already revoked - OK
+
+            token.is_revoked = true;
+            token.revoked_at = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> TryRevokeRefreshTokenAsync(string refreshToken)
+        {
+            var token = await _dbContext.refresh_tokens
+                .FirstOrDefaultAsync(rt => rt.refresh_token == refreshToken);
+
+            if (token == null)
+                return false;
+
+            if (!token.is_revoked)
             {
-                _logger.LogInformation("Revoking refresh token: {RefreshToken}", refreshToken);
-
-                var token = await GetRefreshTokenAsync(refreshToken);
-                if (token == null)
-                {
-                    _logger.LogWarning("Attempted to revoke a non-existing or already revoked refresh token: {RefreshToken}", refreshToken);
-                    throw new KeyNotFoundException("Refresh token not found or has been revoked.");
-                }
-
                 token.is_revoked = true;
-                token.revoked_at = DateTime.Now;
-                _dbContext.refresh_tokens.Update(token);
-                await _dbContext.SaveChangesAsync();
+                token.revoked_at = DateTime.UtcNow;
+            }
 
-                _logger.LogInformation("Successfully revoked refresh token: {RefreshToken}", refreshToken);
-            }
-            catch (DbUpdateException ex)
+            if (!token.is_used)
             {
-                _logger.LogError(ex, "Error occurred while revoking refresh token: {RefreshToken}", refreshToken);
-                throw new InvalidOperationException("An error occurred while revoking the refresh token.", ex);
+                token.is_used = true;
+                token.used_at = DateTime.UtcNow;
             }
+
+            await _dbContext.SaveChangesAsync();
+            return true;
         }
 
         private RefreshToken CreateRefreshTokenEntity(int userId, string refreshToken)

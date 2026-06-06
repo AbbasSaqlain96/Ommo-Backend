@@ -5,6 +5,6 @@ namespace OmmoBackend.Services.Interfaces
 {
     public interface ICallTranscriptService
     {
-        Task<ServiceResponse<List<CallTranscriptLineDto>>> GetTranscriptAsync(int callId, int companyId);
+       // Task<ServiceResponse<List<CallTranscriptLineDto>>> GetTranscriptAsync(int callId, int companyId);
     }
 }

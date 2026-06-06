@@ -18,5 +18,6 @@ namespace OmmoBackend.Repositories.Interfaces
         Task EnqueueSendEmailAsync(SendEmail email);
         Task<Integrations> GetByIdAsync(int id);
         Task UpdateAsync(Integrations integration);
+        Task<List<Integrations>> GetByCompanyAsync(int companyId);
     }
 }

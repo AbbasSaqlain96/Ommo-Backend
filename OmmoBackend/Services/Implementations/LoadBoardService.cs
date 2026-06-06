@@ -1,8 +1,11 @@
 ﻿using OmmoBackend.Dtos;
+using OmmoBackend.Helpers;
 using OmmoBackend.Helpers.Responses;
 using OmmoBackend.Models;
 using OmmoBackend.Repositories.Interfaces;
+using OmmoBackend.Services.Implementations;
 using OmmoBackend.Services.Interfaces;
+using System.Net;
 using System.Security;
 using System.Text;
 using System.Text.Json;
@@ -15,56 +18,222 @@ namespace OmmoBackend.Services.Implementations
         private readonly IIntegrationRepository _integrationRepository;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly JsonSerializerOptions _jsonOptions;
-
+        private readonly IEncryptionService _encryption;
+        private readonly IDefaultIntegrationRepository _defaultIntegrationRepository;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<LoadBoardService> _logger;
+        private readonly ICompanyRepository _companyRepository;
+        private readonly IGlobalIntegrationCredentialRepository _globalIntegrationCredentialRepository;
+
         public LoadBoardService(
             IIntegrationRepository integrationRepository,
             IHttpClientFactory httpClientFactory,
-            ILogger<LoadBoardService> logger)
+            IEncryptionService encryption,
+            IDefaultIntegrationRepository defaultIntegrationRepository,
+            IConfiguration configuration,
+            ILogger<LoadBoardService> logger,
+            ICompanyRepository companyRepository,
+            IGlobalIntegrationCredentialRepository globalIntegrationCredentialRepository)
         {
             _integrationRepository = integrationRepository;
             _httpClientFactory = httpClientFactory;
+            _configuration = configuration;
+            _encryption = encryption;
             _jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            _defaultIntegrationRepository = defaultIntegrationRepository;
             _logger = logger;
+            _companyRepository = companyRepository;
+            _globalIntegrationCredentialRepository = globalIntegrationCredentialRepository;
         }
 
         public async Task<ServiceResponse<List<NormalizedLoadDto>>> GetLoadsAsync(int companyId, LoadFiltersDto filters)
         {
             try
             {
-                var loadboards = await _integrationRepository.GetActiveIntegrationsAsync(companyId);
-                if (loadboards == null || loadboards.Count == 0)
-                    return new ServiceResponse<List<NormalizedLoadDto>> { Success = false, ErrorMessage = "No active loadboard integration available" };
+                if (filters == null || (string.IsNullOrWhiteSpace(filters.Origin) && string.IsNullOrWhiteSpace(filters.Destination)))
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Origin or Destination is required.", 400);
 
-                var results = new List<NormalizedLoadDto>();
+                var integrations = await _integrationRepository.GetByCompanyAsync(companyId);
 
-                // For each active integration, call provider-specific fetch
-                foreach (var integ in loadboards)
+                if (integrations == null || integrations.Count == 0)
                 {
-                    if (integ.integration_id == 1) // Truckstop
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("No loadboard integrations found.", 404);
+                }
+
+                var hasActiveOrPendingIntegration = integrations.Any(x => x.integration_status == "active" || x.integration_status == "pending");
+
+                if (!hasActiveOrPendingIntegration)
+                {
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("No active loadboard integrations found.", 403);
+                }
+
+                var combinedLoads = new List<NormalizedLoadDto>();
+
+                foreach (var integration in integrations)
+                {
+                    ServiceResponse<List<NormalizedLoadDto>>? loadResponse = null;
+
+                    // Fetch logo
+                    var logoPath = await _defaultIntegrationRepository
+                        .GetLogoPathByIntegrationIdAsync(integration.default_integration_id);
+
+                    // ============================
+                    // Truckstop
+                    // ============================
+                    if (integration.default_integration_id == 3)
                     {
-                        var truckRes = await FetchFromTruckstopAsync(integ, filters);
+                        if (integration.integration_status == "active")
+                        {
+                            loadResponse = await FetchFromTruckstopAsync(integration, filters);
+                        }
 
-                        //var truckRes = await FetchFromTruckstopAsync(companyId, filters);
+                        else if (integration.integration_status == "pending")
+                        {
+                            var isVerified = await _companyRepository.IsCompanyVerifiedAsync(companyId);
 
-                        if (truckRes?.Success == true && truckRes.Data != null)
-                            results.AddRange(truckRes.Data);
+                            if (!isVerified)
+                            {
+                                return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Your account is not verified yet.", 403);
+                            }
+
+                            var lastUpdated = integration.last_updated;
+                            var now = DateTime.UtcNow;
+
+                            if ((now - lastUpdated).TotalDays < 3)
+                            {
+                                // Fetch global credential
+                                var credential = await _globalIntegrationCredentialRepository.GetCredentialAsync(3, "truckstop_integration_id");
+
+                                if (credential == null || string.IsNullOrWhiteSpace(credential.credential_value))
+                                {
+                                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Unable to connect to Truckstop.", 403);
+                                }
+
+                                //var decryptedIntegrationId = _encryption.Decrypt(credential.credential_value);
+
+                                // Override integration temporarily
+                                // integration.integration_id = int.Parse(credential.credential_value);
+
+                                loadResponse = await FetchFromTruckstopAsync(integration, filters, credential.credential_value);
+                            }
+                            else
+                            {
+                                return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Your account verification is pending for more than 3 days.", 403);
+                            }
+                        }
                     }
-                    else if (integ.integration_id == 2) // DAT
-                    {
-                        var datRes = await FetchFromDATAsync(integ, filters);
 
-                        if (datRes?.Success == true && datRes.Data != null)
-                            results.AddRange(datRes.Data);
-                    }
-                    else
+                    // ====================================
+                    // DAT
+                    // ====================================
+                    else if (integration.default_integration_id == 4)
                     {
-                        // unknown provider - skip
+                        if (integration.integration_status != "active")
+                            continue;
+
+                        loadResponse = await FetchFromDATAsync(integration, filters);
+                    }
+
+                    if (loadResponse == null)
+                        continue;
+
+                    if (!loadResponse.Success)
+                    {
+                        return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse(
+                            string.IsNullOrWhiteSpace(loadResponse.ErrorMessage)
+                                ? "Load provider request failed."
+                                : loadResponse.ErrorMessage,
+                            loadResponse.StatusCode > 0
+                                ? loadResponse.StatusCode
+                                : 503);
+                    }
+
+                    foreach (var load in loadResponse.Data)
+                    {
+                        load.ImageUrl = logoPath;
+                    }
+
+                    combinedLoads.AddRange(loadResponse.Data);
+                }
+
+                var filtered = ApplyFilters(combinedLoads, filters);
+
+                return ServiceResponse<List<NormalizedLoadDto>>.SuccessResponse(filtered);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in GetLoadsAsync for CompanyId {CompanyId}", companyId);
+
+                return ServiceResponse<List<NormalizedLoadDto>>
+                    .ErrorResponse("Server is temporarily unavailable. Please try again later.", 503);
+            }
+        }
+
+        public async Task<ServiceResponse<List<NormalizedLoadDto>>> xGetLoadsAsync(int companyId, LoadFiltersDto filters)
+        {
+            try
+            {
+                if (filters == null || (string.IsNullOrWhiteSpace(filters.Origin) && string.IsNullOrWhiteSpace(filters.Destination)))
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Origin or Destination is required.", 400);
+
+                var integrations = await _integrationRepository.GetActiveIntegrationsAsync(companyId);
+                if (integrations == null || integrations.Count == 0)
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("No active loadboard integrations", 400);
+
+                var combinedLoads = new List<NormalizedLoadDto>();
+
+                foreach (var integration in integrations)
+                {
+                    // Fetch logo for this integration (DAT/Truckstop)
+                    var logoPath = await _defaultIntegrationRepository
+                        .GetLogoPathByIntegrationIdAsync(integration.default_integration_id);
+
+                    ServiceResponse<List<NormalizedLoadDto>>? loadResponse = null;
+
+                    if (integration.integration_id != 1 && integration.integration_id != 2)
+                    {
+                        var credsJson = integration.credentials?.RootElement.GetRawText();
+                        var creds = GetDecryptedCredentials(credsJson);
+                        var email = creds.GetValueOrDefault("email");
+                    }
+
+                    if (integration.default_integration_id == 3) // Truckstop
+                    {
+                        loadResponse = await FetchFromTruckstopAsync(integration, filters);
+                    }
+                    else if (integration.default_integration_id == 4) // DAT
+                    {
+                        loadResponse = await FetchFromDATAsync(integration, filters);
+                    }
+
+                    if (loadResponse == null)
+                    {
+                        return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Load provider returned no response.", 503);
+                    }
+
+                    if (!loadResponse.Success)
+                    {
+                        return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse(
+                            string.IsNullOrWhiteSpace(loadResponse.ErrorMessage) ? "Load provider request failed." : loadResponse.ErrorMessage,
+                            loadResponse.StatusCode > 0 ? loadResponse.StatusCode : 503);
+                    }
+
+                    if (loadResponse.Success)
+                    {
+                        // Apply logo to each load
+                        foreach (var load in loadResponse.Data)
+                        {
+                            load.ImageUrl = logoPath;
+                        }
+
+                        combinedLoads.AddRange(loadResponse.Data);
                     }
                 }
 
-                return new ServiceResponse<List<NormalizedLoadDto>> { Success = true, Data = results, Message = "Fetched loads" };
+                // Apply filters AFTER data is fetched
+                var filtered = ApplyFilters(combinedLoads, filters);
 
+                return ServiceResponse<List<NormalizedLoadDto>>.SuccessResponse(filtered);
             }
             catch (Exception ex)
             {
@@ -72,248 +241,361 @@ namespace OmmoBackend.Services.Implementations
             }
         }
 
+        private Dictionary<string, string> GetDecryptedCredentials(string credentialsJson)
+        {
+            if (string.IsNullOrWhiteSpace(credentialsJson))
+                return new();
+
+            var credentials = JsonSerializer.Deserialize<Dictionary<string, string>>(credentialsJson) ?? new();
+            var decrypted = new Dictionary<string, string>();
+
+            foreach (var kv in credentials)
+                decrypted[kv.Key] = _encryption.Decrypt(kv.Value);
+
+            return decrypted;
+        }
+
         // ---------------- Truckstop Integration (SOAP) ----------------
-        public async Task<ServiceResponse<List<NormalizedLoadDto>>> FetchFromTruckstopAsync(Integrations companyIntegration, LoadFiltersDto filters)
+        public async Task<ServiceResponse<List<NormalizedLoadDto>>> FetchFromTruckstopAsync(Integrations companyIntegration, LoadFiltersDto filters, string defaultTruckstopIntegrationId = null)
         {
             try
             {
-                if (companyIntegration == null)
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("No Truckstop integration provided.");
 
-                // credentials from integrations.credentials JSON
-                string username = null, password = null;
-                if (companyIntegration.credentials != null)
+
+                if (companyIntegration == null)
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("No Truckstop integration provided.", 400);
+
+                string IntegrationID = null;
+
+                if (companyIntegration.integration_status == "pending")
                 {
-                    companyIntegration.credentials.RootElement.TryGetProperty("username", out var u);
-                    companyIntegration.credentials.RootElement.TryGetProperty("password", out var p);
-                    username = u.GetString();
-                    password = p.GetString();
+                    IntegrationID = FieldCrypto.Decrypt(defaultTruckstopIntegrationId, _configuration);
+                }
+                else if (companyIntegration.credentials != null)
+                {
+                    companyIntegration.credentials.RootElement.TryGetProperty("IntegrationID", out var u);
+                    IntegrationID = FieldCrypto.Decrypt(u.GetString(), _configuration);
                 }
 
-                // global integration id from global_integration_credentials
-                var integrationId = await _integrationRepository.GetGlobalCredentialAsync(companyIntegration.default_integration_id, "Truckstop_IntegrationID");
 
-                if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password) || string.IsNullOrWhiteSpace(integrationId))
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Truckstop credentials or integration id missing.");
+                var usernameEnc = await _integrationRepository
+                .GetGlobalCredentialAsync(companyIntegration.default_integration_id, "Truckstop_username");
 
-                // Build SOAP body using credentials and some filters (example - extend as needed)
-                var pickupDate = (filters.FromDate ?? DateTime.UtcNow.AddDays(6)).ToString("yyyy-MM-ddT00:00:00");
+                var passwordEnc = await _integrationRepository
+                    .GetGlobalCredentialAsync(companyIntegration.default_integration_id, "Truckstop_password");
 
-                var equipmentType = string.IsNullOrWhiteSpace(filters.EquipmentType) ? "V,F,R" : filters.EquipmentType; // adapt to Truckstop format
+                var username = FieldCrypto.Decrypt(usernameEnc, _configuration);
+                var password = FieldCrypto.Decrypt(passwordEnc, _configuration);
+                if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password) || string.IsNullOrWhiteSpace(IntegrationID))
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Truckstop credentials or integration ID missing.", 400);
 
-                var loadType = string.IsNullOrWhiteSpace(filters.LoadType) ? "All" :
-                    filters.LoadType.Equals("BOTH", StringComparison.OrdinalIgnoreCase) ? "All" :
-                    filters.LoadType;
+                //if (string.IsNullOrWhiteSpace(filters.Origin))
+                //  return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Truckstop origin is required.", 400);
 
-                var hoursOld = filters.MaxAgeMinutes > 0 ? filters.MaxAgeMinutes / 60 : 24;
+                var hasOrigin = !string.IsNullOrWhiteSpace(filters.Origin);
+                var hasDestination = !string.IsNullOrWhiteSpace(filters.Destination);
 
-                // If user selects specific states, split and use them
-                var destinationStates = !string.IsNullOrWhiteSpace(filters.Destination)
-                    ? filters.Destination.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    // fallback: search all states if no filter
-                    : new[] { "TX", "CA", "NY", "FL", "GA", "IL", "OH", "PA", "NC", "MI", "AZ", "WA", "CO", "NV", "NJ", "VA", "WI", "MO", "TN", "IN", "MN", "MA", "MD", "AL", "SC", "KY", "OR", "OK", "CT", "IA", "UT", "AR", "KS", "MS", "NM", "NE", "ID", "HI", "ME", "NH", "MT", "RI", "WV", "SD", "ND", "DE", "VT", "WY", "LA", "AK" };
+                var (originCity, originState, parsedOriginCountry) = ParseLocation(filters.Origin);
+                var (destCity, destState, parsedDestCountry) = ParseLocation(filters.Destination);
 
-                var destinationStatesXml = string.Join(Environment.NewLine,
-                    destinationStates.Select(state => $"<web1:DestinationState>{SecurityElement.Escape(state)}</web1:DestinationState>"));
+                if (!hasOrigin && !hasDestination)
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Origin or Destination is required.", 400);
 
+                if (hasOrigin && (string.IsNullOrWhiteSpace(originCity) || string.IsNullOrWhiteSpace(originState)))
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Truckstop origin city and state are required.", 400);
 
+                string originCountry = string.IsNullOrWhiteSpace(parsedOriginCountry) ? "usa" : parsedOriginCountry.ToLowerInvariant();
+                string destCountry = string.IsNullOrWhiteSpace(parsedDestCountry) ? "usa" : parsedDestCountry.ToLowerInvariant();
 
-                var (originCity, originState, originCountry) = ParseLocation(filters.Origin);
-                var (destCity, destState, destCountry) = ParseLocation(filters.Destination);
+                var equipmentType = string.IsNullOrWhiteSpace(filters.EquipmentType)
+                    ? "V,F,R"
+                    : string.Join(",", filters.EquipmentType
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(e => e.ToUpperInvariant()));
 
-                originCountry ??= "usa";
-                destCountry ??= "usa";
+                var normalizedLoadType = string.IsNullOrWhiteSpace(filters.LoadType)
+                    ? "All"
+                    : filters.LoadType.Trim().ToUpperInvariant();
 
-                var soapBody = $@"
-                        <soapenv:Envelope xmlns:soapenv=""http://schemas.xmlsoap.org/soap/envelope/""
-                                          xmlns:v12=""http://webservices.truckstop.com/v12""
-                                          xmlns:web=""http://schemas.datacontract.org/2004/07/WebServices""
-                                          xmlns:web1=""http://schemas.datacontract.org/2004/07/WebServices.Searching""
-                                          xmlns:arr=""http://schemas.microsoft.com/2003/10/Serialization/Arrays"">
-                           <soapenv:Header/>
-                           <soapenv:Body>
-                              <v12:GetMultipleLoadDetailResults>
-                                 <v12:searchRequest>
-                                    <web:IntegrationId>{integrationId}</web:IntegrationId>
-                                    <web:Password>{SecurityElement.Escape(password)}</web:Password>
-                                    <web:UserName>{SecurityElement.Escape(username)}</web:UserName>
-                                    <web1:Criteria>
+                var loadType = normalizedLoadType switch
+                {
+                    "FULL" => "Full",
+                    "PARTIAL" => "Partial",
+                    _ => "All"
+                };
 
-<web1:DestinationCountry>{SecurityElement.Escape(destCountry)}</web1:DestinationCountry>
+                var hoursOld = filters.MaxAgeMinutes > 0
+                    ? filters.MaxAgeMinutes
+                    : 24;
 
+                var destinationXml = string.IsNullOrWhiteSpace(filters.Destination)
+                    ? @"
+                                                    <web1:DestinationCountry>usa</web1:DestinationCountry>
+                                                    <web1:DestinationRange>300</web1:DestinationRange>"
+                    : $@"
+                                                    <web1:DestinationCountry>{SecurityElement.Escape(destCountry)}</web1:DestinationCountry>
+                                                    <web1:DestinationRange>{filters.MaxDestinationDeadheadMiles}</web1:DestinationRange>
+                                                    {(string.IsNullOrWhiteSpace(destCity) ? string.Empty : $"<web1:DestinationCity>{SecurityElement.Escape(destCity)}</web1:DestinationCity>")}
+                                                    {(string.IsNullOrWhiteSpace(destState) ? string.Empty : $"<web1:DestinationState>{SecurityElement.Escape(destState)}</web1:DestinationState>")}";
 
-                                       <web1:DestinationRange>{filters.MaxDestinationDeadheadMiles}</web1:DestinationRange>
-                                       {destinationStatesXml}
-                                       <web1:EquipmentType>{SecurityElement.Escape(equipmentType)}</web1:EquipmentType>
-                                       <web1:LoadType>{SecurityElement.Escape(loadType)}</web1:LoadType>
-                                       <web1:HoursOld>{hoursOld}</web1:HoursOld>
+                var originXml = hasOrigin
+                    ? $@"
+                                                    <web1:OriginCity>{SecurityElement.Escape(originCity)}</web1:OriginCity>
+                                                    <web1:OriginCountry>{SecurityElement.Escape(originCountry)}</web1:OriginCountry>
+                                                    <web1:OriginRange>{filters.MaxOriginDeadheadMiles}</web1:OriginRange>
+                                                    <web1:OriginState>{SecurityElement.Escape(originState)}</web1:OriginState>"
+                    : @"
+                                                    <web1:OriginCountry>usa</web1:OriginCountry>
+                                                    <web1:OriginRange>300</web1:OriginRange>";
 
-<web1:OriginCountry>{SecurityElement.Escape(originCountry)}</web1:OriginCountry>
+                DateTime[] dateSequence;
+                if (filters.FromDate.HasValue && filters.ToDate.HasValue && filters.ToDate.Value.Date >= filters.FromDate.Value.Date)
+                {
+                    var start = filters.FromDate.Value.Date;
+                    var end = filters.ToDate.Value.Date;
+                    dateSequence = Enumerable
+                        .Range(0, (end - start).Days + 1)
+                        .Select(offset => start.AddDays(offset))
+                        .ToArray();
+                }
+                else if (filters.FromDate.HasValue)
+                {
+                    dateSequence = new[] { filters.FromDate.Value.Date };
+                }
+                else
+                {
+                    dateSequence = new[]
+                    {
+                        DateTime.UtcNow.Date
+                    };
+                }
 
-
-                                       <web1:OriginLatitude>0</web1:OriginLatitude>
-                                       <web1:OriginLongitude>0</web1:OriginLongitude>
-                                       <web1:OriginRange>{filters.MaxOriginDeadheadMiles}</web1:OriginRange>
-                                       <web1:PickupDates>
-                                          <arr:dateTime>{pickupDate}</arr:dateTime>
-                                       </web1:PickupDates>
-                                       <web1:PageNumber>1</web1:PageNumber>
-                                       <web1:PageSize>100</web1:PageSize>
-                                       <web1:SortBy>Age</web1:SortBy>
-                                       <web1:SortDescending>true</web1:SortDescending>
-                                    </web1:Criteria>
-                                 </v12:searchRequest>
-                              </v12:GetMultipleLoadDetailResults>
-                           </soapenv:Body>
-                        </soapenv:Envelope>";
+                var pickupDatesXml = string.Join(Environment.NewLine,
+                    dateSequence.Select(d => $"<arr:dateTime>{d:yyyy-MM-dd}T00:00:00</arr:dateTime>"));
 
                 var client = _httpClientFactory.CreateClient("truckstop");
-                var request = new HttpRequestMessage(HttpMethod.Post, "http://testws.truckstop.com:8080/V13/Searching/LoadSearch.svc")
+
+                // ----------------- SOAP BODY (ONE REQUEST) -----------------
+
+                var soapBody = $@"
+                                    <soapenv:Envelope xmlns:soapenv=""http://schemas.xmlsoap.org/soap/envelope/""
+                                                      xmlns:v12=""http://webservices.truckstop.com/v12""
+                                                      xmlns:web=""http://schemas.datacontract.org/2004/07/WebServices""
+                                                      xmlns:web1=""http://schemas.datacontract.org/2004/07/WebServices.Searching""
+                                                      xmlns:arr=""http://schemas.microsoft.com/2003/10/Serialization/Arrays"">
+                                       <soapenv:Header/>
+                                       <soapenv:Body>
+                                          <v12:GetMultipleLoadDetailResults>
+                                             <v12:searchRequest>
+                                                <web:IntegrationId>{IntegrationID}</web:IntegrationId>
+                                                <web:Password>{SecurityElement.Escape(password)}</web:Password>
+                                                <web:UserName>{SecurityElement.Escape(username)}</web:UserName>
+                                                <web1:Criteria>
+                                                    {destinationXml}
+                                                    <web1:EquipmentType>{SecurityElement.Escape(equipmentType)}</web1:EquipmentType>
+                                                    <web1:HoursOld>{hoursOld}</web1:HoursOld>
+                                                    <web1:LoadType>{SecurityElement.Escape(loadType)}</web1:LoadType>
+                                                    {originXml}
+                                                    <web1:PickupDates>
+                                                        {pickupDatesXml}
+                                                    </web1:PickupDates>
+                                                   <web1:PageNumber>1</web1:PageNumber>
+                                                   <web1:PageSize>10</web1:PageSize>
+                                                   <web1:SortBy>Age</web1:SortBy>
+                                                   <web1:SortDescending>true</web1:SortDescending>
+                                                </web1:Criteria>
+                                             </v12:searchRequest>
+                                          </v12:GetMultipleLoadDetailResults>
+                                       </soapenv:Body>
+                                    </soapenv:Envelope>";
+
+                var request = new HttpRequestMessage(HttpMethod.Post, "https://webservices.truckstop.com/V13/Searching/LoadSearch.svc")
                 {
                     Content = new StringContent(soapBody, Encoding.UTF8, "text/xml")
                 };
                 request.Headers.Add("SOAPAction", "http://webservices.truckstop.com/v12/ILoadSearch/GetMultipleLoadDetailResults");
 
+                // ----------------- SEND ONE REQUEST -----------------
                 var response = await client.SendAsync(request);
-                if (!response.IsSuccessStatusCode)
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"Truckstop API call failed: {response.StatusCode}");
-
                 var xmlResponse = await response.Content.ReadAsStringAsync();
-                var loads = ParseTruckstopResponse(xmlResponse); // your parser
 
-                return ServiceResponse<List<NormalizedLoadDto>>.SuccessResponse(loads);
+                if (!response.IsSuccessStatusCode)
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("Truckstop request failed.", 503);
+
+                var normalized = NormalizeTruckstopLoads(xmlResponse);
+                return ServiceResponse<List<NormalizedLoadDto>>.SuccessResponse(normalized);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "FetchFromTruckstopAsync failed");
-                return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"Truckstop fetch failed: {ex.Message}");
+                return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"Truckstop fetch failed", 503);
             }
         }
 
-        private (string city, string state, string country) ParseLocation(string input)
-        {
-            if (string.IsNullOrWhiteSpace(input))
-                return (null, null, null);
-
-            // Normalize and split by comma
-            var parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-            if (parts.Length == 1)
-            {
-                // Could be state, city, or country
-                var val = parts[0];
-                if (val.Length == 2) // assume state code like AZ, TX
-                    return (null, val.ToUpperInvariant(), "usa");
-                else if (val.Length == 3 && val.ToUpperInvariant() == "USA") // whole country
-                    return (null, null, "usa");
-                else
-                    return (val, null, "usa"); // assume city
-            }
-            else if (parts.Length == 2)
-            {
-                // "Phoenix, AZ"
-                return (parts[0], parts[1].ToUpperInvariant(), "usa");
-            }
-
-            return (null, null, null);
-        }
-
-        private List<NormalizedLoadDto> ParseTruckstopResponse(string soapResponse)
+        private List<NormalizedLoadDto> NormalizeTruckstopLoads(string soapResponse)
         {
             var list = new List<NormalizedLoadDto>();
 
+            if (string.IsNullOrWhiteSpace(soapResponse))
+                return list;
+
+            XDocument doc;
             try
             {
-                var doc = XDocument.Parse(soapResponse);
-
-                // Example: find all elements named "LoadDetailResult" or "Load" etc.
-                var loadNodes = doc.Descendants()
-                    .Where(x => x.Name.LocalName.Contains("LoadDetailResult") ||
-                                x.Name.LocalName.Contains("MultipleLoadDetailResult"))
-                    .Take(50);  // safety cap
-
-                // In real implementation find correct nodes. Here we'll simulate parsing.
-                foreach (var ln in loadNodes)
-                {
-                    var originCity = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("OriginCity", StringComparison.OrdinalIgnoreCase))?.Value;
-                    var originState = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("OriginState", StringComparison.OrdinalIgnoreCase))?.Value;
-                    var destCity = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("DestinationCity", StringComparison.OrdinalIgnoreCase))?.Value;
-                    var destState = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("DestinationState", StringComparison.OrdinalIgnoreCase))?.Value;
-
-                    // Payment and mileage
-                    var paymentAmountNode = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("PaymentAmount", StringComparison.OrdinalIgnoreCase))?.Value;
-                    var mileageNode = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("Mileage", StringComparison.OrdinalIgnoreCase))?.Value;
-
-                    double paymentAmount = 0;
-                    double mileage = 0;
-
-                    double.TryParse(paymentAmountNode, out paymentAmount);
-                    double.TryParse(mileageNode, out mileage);
-
-                    // --- FALLBACKS ---
-                    // If PaymentAmount = 0, try FuelCost or other provided totals
-                    if (paymentAmount <= 0)
-                    {
-                        var fuelCostNode = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("FuelCost", StringComparison.OrdinalIgnoreCase))?.Value;
-                        if (double.TryParse(fuelCostNode?.Replace("$", "").Replace(",", ""), out var fuelCost) && fuelCost > 0)
-                        {
-                            paymentAmount = fuelCost;
-                        }
-                    }
-
-                    // Now calculate RPM
-                    double ratePerMile = 0;
-                    if (paymentAmount > 0 && mileage > 0)
-                        ratePerMile = Math.Round(paymentAmount / mileage, 2);
-
-                    var dto = new NormalizedLoadDto
-                    {
-                        Origin = CombineCityState(originCity, originState),
-                        DHO = int.TryParse(ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("OriginDistance", StringComparison.OrdinalIgnoreCase))?.Value, out var dho) ? dho : (int?)null,
-                        DHD = int.TryParse(ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("DestinationDistance", StringComparison.OrdinalIgnoreCase))?.Value, out var dhd) ? dhd : (int?)null,
-                        Destination = CombineCityState(destCity, destState),
-                        FromDate = DateTime.UtcNow.ToString("yyyy-MM-dd"),
-                        ToDate = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd"),
-                        Age = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("Age", StringComparison.OrdinalIgnoreCase))?.Value ?? "0",
-
-                        RPM = ratePerMile == 0 ? (double?)null : ratePerMile,
-
-                        EquipmentType = ln.Descendants().Where(x => x.Name.LocalName.Equals("EquipmentTypes", StringComparison.OrdinalIgnoreCase)).Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("Code", StringComparison.OrdinalIgnoreCase))?.Value,
-
-                        Length = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("Length", StringComparison.OrdinalIgnoreCase))?.Value,
-                        Weight = int.TryParse(ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("Weight", StringComparison.OrdinalIgnoreCase))?.Value, out var w) ? w : (int?)null,
-                        LoadType = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("LoadType", StringComparison.OrdinalIgnoreCase))?.Value,
-
-                        ClientName = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("TruckCompanyName", StringComparison.OrdinalIgnoreCase))?.Value,
-                        ClientMC = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("MCNumber", StringComparison.OrdinalIgnoreCase))?.Value,
-                        ClientLocation = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("TruckCompanyCity", StringComparison.OrdinalIgnoreCase))?.Value,
-                        ClientPhone = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("TruckCompanyPhone", StringComparison.OrdinalIgnoreCase))?.Value,
-                        ClientEmail = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("TruckCompanyEmail", StringComparison.OrdinalIgnoreCase))?.Value,
-                        ClientCreditScore = ln.Descendants().FirstOrDefault(x => x.Name.LocalName.Equals("Credit", StringComparison.OrdinalIgnoreCase))?.Value,
-                        ClientDaysOfPay = null,
-
-                        Source = "Truckstop",
-                        MatchID = null,
-                        ID = ln.Elements().FirstOrDefault(x => x.Name.LocalName.Equals("ID", StringComparison.OrdinalIgnoreCase))?.Value
-                    };
-
-                    list.Add(dto);
-                }
+                doc = XDocument.Parse(soapResponse);
             }
             catch
             {
-                // parsing errors ignored; return what we have
+                return list;
+            }
+
+            var loadNodes = doc.Descendants()
+                .Where(x => x.Name.LocalName == "MultipleLoadDetailResult")
+                .ToList();
+
+            foreach (var ln in loadNodes)
+            {
+                // --- ORIGIN ---
+                var originCity = GetValue(ln, "OriginCity");
+                var originState = GetValue(ln, "OriginState");
+                var originDist = GetInt(ln, "OriginDistance");
+
+                // --- DESTINATION ---
+                var destCity = GetValue(ln, "DestinationCity");
+                var destState = GetValue(ln, "DestinationState");
+                var destDist = GetInt(ln, "DestinationDistance");
+
+                // --- RATE / PAY ---
+                double payment = GetDouble(ln, "PaymentAmount");
+                double mileage = GetDouble(ln, "Mileage");
+
+                // fallback: sometimes Truckstop uses FuelCost or TotalPay
+                if (payment <= 0)
+                {
+                    var fallback1 = GetDouble(ln, "FuelCost");
+                    var fallback2 = GetDouble(ln, "TotalPay");
+                    if (fallback1 > 0) payment = fallback1;
+                    if (fallback2 > 0) payment = fallback2;
+                }
+
+                // --- RPM ---
+                double rpm = 0;
+                if (payment > 0 && mileage > 0)
+                    rpm = Math.Round(payment / mileage, 2);
+
+                // --- EQUIPMENT ---
+                var equipment =
+                    ln.Descendants().FirstOrDefault(x => x.Name.LocalName == "EquipmentTypes")
+                     ?.Descendants().FirstOrDefault(x => x.Name.LocalName == "Code")
+                     ?.Value;
+
+                // --- DATE HANDLING ---
+                var pickupDateString = GetValue(ln, "PickupDate");
+                var deliveryDateString = GetValue(ln, "DeliveryDate");
+                DateTime? pickupDate = TryParseDate(pickupDateString);
+                DateTime? deliveryDate = TryParseDate(deliveryDateString);
+
+                // --- Final DTO ---
+                var dto = new NormalizedLoadDto
+                {
+                    OriginCity = originCity,
+                    OriginState = originState,
+                    DestinationCity = destCity,
+                    DestinationState = destState,
+
+                    DHO = originDist,
+                    DHD = destDist,
+
+                    FromDate = pickupDate?.ToString("yyyy-MM-dd") ?? pickupDateString,
+                    ToDate = deliveryDate?.ToString("yyyy-MM-dd") ?? deliveryDateString,
+
+                    Age = GetValue(ln, "Age"),
+
+                    RPM = rpm == 0 ? (double?)null : rpm,
+                    RateTotal = payment,
+                    Mileage = mileage,
+
+                    EquipmentType = equipment,
+                    Length = GetValue(ln, "Length"),
+                    Weight = GetInt(ln, "Weight"),
+                    LoadType = GetValue(ln, "LoadType"),
+
+                    ClientName = GetValue(ln, "TruckCompanyName"),
+                    ClientMC = GetValue(ln, "MCNumber"),
+                    ClientLocation = GetValue(ln, "TruckCompanyCity"),
+                    ClientPhone = GetValue(ln, "TruckCompanyPhone"),
+                    ClientEmail = GetValue(ln, "TruckCompanyEmail"),
+                    ClientCreditScore = GetValue(ln, "Credit"),
+                    ClientDaysOfPay = null,
+
+                    Source = "Truckstop",
+                    ID = GetValue(ln, "ID"),
+                    MatchID = null
+                };
+
+                list.Add(dto);
             }
 
             return list;
         }
 
-        private string CombineCityState(string city, string state)
+        private string GetValue(XElement parent, string name)
         {
-            if (string.IsNullOrWhiteSpace(city) && string.IsNullOrWhiteSpace(state)) return null;
-            if (string.IsNullOrWhiteSpace(city)) return state;
-            if (string.IsNullOrWhiteSpace(state)) return city;
-            return $"{city}, {state}";
+            return parent.Descendants().FirstOrDefault(x => x.Name.LocalName == name)?.Value;
+        }
+
+        private int? GetInt(XElement parent, string name)
+        {
+            var candidates = parent
+                .Descendants()
+                .Where(x => x.Name.LocalName == name)
+                .Select(x => x.Value)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .ToList();
+
+            if (candidates.Count == 0)
+                return null;
+
+            int? firstParsed = null;
+            foreach (var raw in candidates)
+            {
+                var normalized = raw.Trim().Replace(",", "");
+
+                if (int.TryParse(normalized, out var i))
+                {
+                    firstParsed ??= i;
+                    if (i > 0)
+                        return i;
+                    continue;
+                }
+
+                var numericOnly = new string(normalized
+                    .Where(ch => char.IsDigit(ch) || ch == '.' || ch == '-')
+                    .ToArray());
+
+                if (double.TryParse(numericOnly, out var d))
+                {
+                    var rounded = (int)Math.Round(d, MidpointRounding.AwayFromZero);
+                    firstParsed ??= rounded;
+                    if (rounded > 0)
+                        return rounded;
+                }
+            }
+
+            return firstParsed;
+        }
+
+        private double GetDouble(XElement parent, string name)
+        {
+            var v = GetValue(parent, name);
+            return double.TryParse(v?.Replace("$", "").Replace(",", ""), out var n) ? n : 0;
+        }
+
+        private DateTime? TryParseDate(string v)
+        {
+            if (DateTime.TryParse(v, out var d))
+                return d;
+            return null;
         }
 
         // ---------------- DAT Integration (JSON) ----------------
@@ -321,13 +603,18 @@ namespace OmmoBackend.Services.Implementations
         {
             try
             {
-                // read credentials
-                string orgUsername = GetStringOrFallback(integ.credentials, "org_username", "username");
-                string orgPassword = GetStringOrFallback(integ.credentials, "org_password", "password");
-                string userEmail = GetStringOrFallback(integ.credentials, "user_email", "user", "email");
+
+                string orgUsernameEnc = GetStringOrFallback(integ.credentials, "org_username", "username");
+                string orgPasswordEnc = GetStringOrFallback(integ.credentials, "org_password", "password");
+                string userEmailEnc = GetStringOrFallback(integ.credentials, "user_email", "user", "email");
+
+                string orgUsername = FieldCrypto.Decrypt(orgUsernameEnc, _configuration);
+                string orgPassword = FieldCrypto.Decrypt(orgPasswordEnc, _configuration);
+                string userEmail = FieldCrypto.Decrypt(userEmailEnc, _configuration);
+
 
                 if (string.IsNullOrWhiteSpace(orgUsername) || string.IsNullOrWhiteSpace(orgPassword))
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT credentials missing");
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT credentials missing", 400);
 
                 var http = _httpClientFactory.CreateClient();
 
@@ -341,8 +628,8 @@ namespace OmmoBackend.Services.Implementations
                 using var orgResp = await http.SendAsync(orgReq);
                 if (!orgResp.IsSuccessStatusCode)
                 {
-                    var txt = await orgResp.Content.ReadAsStringAsync();
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT org auth failed: {orgResp.StatusCode} {txt}");
+                    var text = await orgResp.Content.ReadAsStringAsync();
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT org auth failed: {orgResp.StatusCode} {text}", orgResp.StatusCode == HttpStatusCode.Unauthorized ? 401 : 502);
                 }
 
                 var orgRespStr = await orgResp.Content.ReadAsStringAsync();
@@ -355,7 +642,7 @@ namespace OmmoBackend.Services.Implementations
                     orgAccessToken = a2.GetString();
 
                 if (string.IsNullOrWhiteSpace(orgAccessToken))
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT org auth returned no token");
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT org auth returned no token", 502);
 
                 // 2) User auth
                 var userBody = new { username = userEmail };
@@ -368,8 +655,8 @@ namespace OmmoBackend.Services.Implementations
                 using var userResp = await http.SendAsync(userReq);
                 if (!userResp.IsSuccessStatusCode)
                 {
-                    var t = await userResp.Content.ReadAsStringAsync();
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT user auth failed: {userResp.StatusCode} {t}");
+                    var text = await userResp.Content.ReadAsStringAsync();
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT user auth failed: {userResp.StatusCode} {text}", userResp.StatusCode == HttpStatusCode.Unauthorized ? 401 : 502);
                 }
 
                 var userRespStr = await userResp.Content.ReadAsStringAsync();
@@ -382,7 +669,7 @@ namespace OmmoBackend.Services.Implementations
                     userToken = b2.GetString();
 
                 if (string.IsNullOrWhiteSpace(userToken))
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT user auth returned no token");
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT user auth returned no token", 502);
 
                 // 3) Create search query
                 var queryUrl = "https://freight.api.staging.dat.com/search/v3/queries";
@@ -398,13 +685,13 @@ namespace OmmoBackend.Services.Implementations
                 if (!qResp.IsSuccessStatusCode)
                 {
                     var txt = await qResp.Content.ReadAsStringAsync();
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT query create failed: {qResp.StatusCode} {txt}");
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT query create failed: {qResp.StatusCode} {txt}", 502);
                 }
 
                 var qRespStr = await qResp.Content.ReadAsStringAsync();
                 using var qDoc = JsonDocument.Parse(qRespStr);
                 if (!qDoc.RootElement.TryGetProperty("queryId", out var queryIdEl))
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT query creation response missing queryId");
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("DAT query creation response missing queryId", 502);
 
                 var queryId = queryIdEl.GetString();
 
@@ -416,17 +703,21 @@ namespace OmmoBackend.Services.Implementations
                 if (!mResp.IsSuccessStatusCode)
                 {
                     var tmp = await mResp.Content.ReadAsStringAsync();
-                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT get matches failed: {mResp.StatusCode} {tmp}");
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT get matches failed: {mResp.StatusCode} {tmp}", 502);
                 }
 
                 var mRespStr = await mResp.Content.ReadAsStringAsync();
                 var normalized = ParseDATMatchesResponse(mRespStr);
+                if (normalized == null || normalized.Count == 0)
+                    return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse("No DAT loads found.", 404);
+
                 return ServiceResponse<List<NormalizedLoadDto>>.SuccessResponse(normalized);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "FetchFromDATAsync failed");
-                return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT fetch failed: {ex.Message}");
+                return ServiceResponse<List<NormalizedLoadDto>>.ErrorResponse($"DAT fetch failed", 503);
+
             }
         }
 
@@ -446,13 +737,12 @@ namespace OmmoBackend.Services.Implementations
 
         private object BuildDATSearchQuery(LoadFiltersDto filters)
         {
-            var earliest = filters.FromDate?.ToString("yyyy-MM-ddTHH:mm:ssZ") ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            var latest = filters.ToDate?.ToString("yyyy-MM-ddTHH:mm:ssZ") ?? DateTime.UtcNow.AddDays(14).ToString("yyyy-MM-ddTHH:mm:ssZ");
+            var earliest = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            var latest = DateTime.UtcNow.AddDays(2).ToString("yyyy-MM-ddTHH:mm:ssZ");
 
             // Parse equipment types from filters or default
-            var equipmentTypes = (filters.EquipmentType ?? "AC, V, R, F")
+            var equipmentTypes = ("AC, V, R, F")
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
 
             var (datOriginCity, datOriginState, datOriginCountry) = ParseLocation(filters.Origin);
             var (datDestCity, datDestState, datDestCountry) = ParseLocation(filters.Destination);
@@ -487,9 +777,9 @@ namespace OmmoBackend.Services.Implementations
                             }
                         },
                     },
-                    maxAgeMinutes = filters.MaxAgeMinutes > 0 ? filters.MaxAgeMinutes : 4320,
-                    maxOriginDeadheadMiles = filters.MaxOriginDeadheadMiles > 0 ? filters.MaxOriginDeadheadMiles : 450,
-                    maxDestinationDeadheadMiles = filters.MaxDestinationDeadheadMiles > 0 ? filters.MaxDestinationDeadheadMiles : 450,
+                    maxAgeMinutes = (filters.MaxAgeMinutes > 0 ? filters.MaxAgeMinutes : 24) * 60,
+                    maxOriginDeadheadMiles = filters.MaxOriginDeadheadMiles > 0 ? filters.MaxOriginDeadheadMiles : 100,
+                    maxDestinationDeadheadMiles = filters.MaxDestinationDeadheadMiles > 0 ? filters.MaxDestinationDeadheadMiles : 100,
                     availability = new
                     {
                         earliestWhen = earliest,
@@ -527,6 +817,34 @@ namespace OmmoBackend.Services.Implementations
             };
 
             return payload;
+        }
+
+        private (string city, string state, string country) ParseLocation(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return (null, null, null);
+
+            // Normalize and split by comma
+            var parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (parts.Length == 1)
+            {
+                // Could be state, city, or country
+                var val = parts[0];
+                if (val.Length == 2) // assume state code like AZ, TX
+                    return (null, val.ToUpperInvariant(), "usa");
+                else if (val.Length == 3 && val.ToUpperInvariant() == "USA") // whole country
+                    return (null, null, "usa");
+                else
+                    return (val, null, "usa"); // assume city
+            }
+            else if (parts.Length == 2)
+            {
+                // "Phoenix, AZ"
+                return (parts[0], parts[1].ToUpperInvariant(), "usa");
+            }
+
+            return (null, null, null);
         }
 
         private List<NormalizedLoadDto> ParseDATMatchesResponse(string responseJson)
@@ -624,13 +942,29 @@ namespace OmmoBackend.Services.Implementations
                                 ? (int?)(DateTime.UtcNow - sw.GetDateTime()).TotalDays
                                 : null;
 
+                            double mileage = 0;
+                            if (m.TryGetProperty("mileage", out var mileEl) && mileEl.TryGetDouble(out var mileVal))
+                            {
+                                mileage = mileVal;
+                            }
+                            else if (deadheadOrigin.HasValue && deadheadDestination.HasValue)
+                            {
+                                mileage = deadheadOrigin.Value + deadheadDestination.Value; // fallback
+                            }
+
+                            double rateTotal = 0;
+                            if (rpm.HasValue && mileage > 0)
+                                rateTotal = rpm.Value * mileage;
+
                             // build DTO
                             var dto = new NormalizedLoadDto
                             {
-                                Origin = CombineCityState(originCity, originState),
+                                OriginCity = originCity,
+                                OriginState = originState,
+                                DestinationCity = destCity,
+                                DestinationState = destState,
                                 DHO = deadheadOrigin,
                                 DHD = deadheadDestination,
-                                Destination = CombineCityState(destCity, destState),
                                 FromDate = fromDate,
                                 ToDate = toDate,
                                 Age = age?.ToString(),
@@ -648,7 +982,10 @@ namespace OmmoBackend.Services.Implementations
                                 ClientDaysOfPay = clientDaysOfPay,
                                 Source = "DAT",
                                 MatchID = m.TryGetProperty("matchId", out var mid) ? mid.GetString() : null,
-                                ID = null
+                                ID = null,
+
+                                Mileage = mileage,
+                                RateTotal = rateTotal
                             };
 
                             list.Add(dto);
@@ -667,6 +1004,53 @@ namespace OmmoBackend.Services.Implementations
             }
 
             return list;
+        }
+
+        // ---------------------------
+        // Apply Filters
+        // ---------------------------
+        public List<NormalizedLoadDto> ApplyFilters(List<NormalizedLoadDto> loads, LoadFiltersDto filters)
+        {
+            if (!loads.Any()) return loads;
+
+            // RPM filter
+            if (filters.RPM.HasValue)
+            {
+                loads = loads.Where(x =>
+                    x.RPM.HasValue && x.RPM.Value >= (double)filters.RPM.Value
+                ).ToList();
+            }
+
+            // Equipment filter
+            if (!string.IsNullOrWhiteSpace(filters.EquipmentType))
+            {
+                var allowed = filters.EquipmentType.Split(',').Select(e => e.Trim().ToUpper()).ToList();
+                loads = loads.Where(x =>
+                    !string.IsNullOrWhiteSpace(x.EquipmentType) &&
+                    allowed.Contains(x.EquipmentType.ToUpper())
+                ).ToList();
+            }
+
+            // Length filter
+            if (filters.MaximumLengthFeet.HasValue)
+            {
+                loads = loads.Where(x =>
+                {
+                    if (!double.TryParse(x.Length, out var len))
+                        return true;
+                    return len <= filters.MaximumLengthFeet.Value;
+                }).ToList();
+            }
+
+            // Weight filter
+            if (filters.MaximumWeightPounds.HasValue)
+            {
+                loads = loads.Where(x =>
+                    x.Weight.HasValue && x.Weight.Value <= filters.MaximumWeightPounds.Value
+                ).ToList();
+            }
+
+            return loads;
         }
     }
 }

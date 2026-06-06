@@ -11,10 +11,13 @@ namespace OmmoBackend.Dtos
         [RegularExpression(@"^\+?[1-9]\d{1,14}$", ErrorMessage = "Invalid twillo number format.")]
         public string? twillo_number { get; set; }
 
-        public CompanyDialInfoDto(string companyName, string twilioNumber)
+
+        public string? mc_number { get; set; }
+        public CompanyDialInfoDto(string companyName, string twilioNumber, string? mc_number)
         {
             name = companyName;
             twillo_number = twilioNumber;
+            this.mc_number = mc_number;
         }
     }
 }

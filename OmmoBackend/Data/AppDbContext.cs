@@ -109,14 +109,42 @@ namespace OmmoBackend.Data
         public DbSet<Call> call { get; set; }
         public DbSet<CallTranscript> call_transcript { get; set; }
 
+        public DbSet<CallConfirmData> call_confirm_data { get; set; }
+
+
+        public DbSet<CallSentiment> call_sentiment { get; set; }
+
+
+        public DbSet<CallSummaryBullet> call_summary_bullets { get; set; }
+
         public DbSet<Integrations> integrations { get; set; }
         public DbSet<DefaultIntegrations> default_integrations { get; set; }
         public DbSet<GlobalIntegrationCredentials> global_integration_credentials { get; set; }
 
         public DbSet<IntegrationEmailProcess> integration_email_process { get; set; }
 
+        public DbSet<CompanyOnboarding> company_onboarding { get; set; }
+
+        public DbSet<CompanyPaymentProfile> companies_payment_profile { get; set; }
+
+        public DbSet<Questionnaire> questionnaire { get; set; }
+
+        public DbSet<CustomPackageRequest> custom_package_request { get; set; }
+
+        public DbSet<PackagePlan> package_plan { get; set; }
+
+        public DbSet<CompanyBillHistory> company_bill_history { get; set; }
+
+        public DbSet<SupportRequest> support_request { get; set; }
+
+        public DbSet<CompanyPlanChangeRequest> company_plan_change_request { get; set; }
+
+        public DbSet<StripeProcessedEvent> stripe_processed_events { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
+            modelBuilder.HasPostgresEnum<OnboardingStep>("onboarding_step");
+
             base.OnModelCreating(modelBuilder);
 
             // Configure AccessLevel enum to be stored as int in the database
@@ -233,6 +261,22 @@ v => (VehicleDocumentStatus)Enum.Parse(typeof(VehicleDocumentStatus), v) // Conv
             modelBuilder.Entity<IssueTicket>()
           .Property(t => t.recurrent_type)
           .HasConversion<string>();
+
+            modelBuilder.Entity<CompanyOnboarding>()
+               .Property(x => x.current_step)
+               .HasColumnType("onboarding_step");
+
+            modelBuilder.Entity<PackagePlan>()
+      .Property(p => p.plan_type)
+      .HasConversion<string>();
+
+            modelBuilder.Entity<PackagePlan>()
+                .Property(p => p.plan_status)
+                .HasConversion<string>();
+
+            modelBuilder.Entity<PackagePlan>()
+                .Property(p => p.interval)
+                .HasConversion<string>();
         }
     }
 }

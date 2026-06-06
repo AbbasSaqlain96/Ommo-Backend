@@ -1,17 +1,10 @@
-using System;
-using System.Collections.Generic;
-using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
-using System.Security.Cryptography;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Caching.Distributed;
 using OmmoBackend.Dtos;
 using OmmoBackend.Helpers.Constants;
 using OmmoBackend.Helpers.Enums;
 using OmmoBackend.Helpers.Responses;
-using OmmoBackend.Repositories;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Interfaces;
+using System.Security.Cryptography;
 
 namespace OmmoBackend.Services.Implementations
 {
@@ -20,16 +13,18 @@ namespace OmmoBackend.Services.Implementations
         private readonly IUserRepository _userRepository;
         private readonly IJwtTokenGenerator _jwtTokenGenerator;
         private readonly IRefreshTokenRepository _tokenRepository;
+        private readonly IOnboardingService _onboardingService;
         private readonly ILogger<AuthService> _logger;
 
         /// <summary>
         /// Initializes a new instance of the AuthService class with the specified services and repositories.
         /// </summary>
-        public AuthService(IUserRepository userRepository, IJwtTokenGenerator jwtTokenGenerator, IRefreshTokenRepository tokenRepository, ILogger<AuthService> logger)
+        public AuthService(IUserRepository userRepository, IJwtTokenGenerator jwtTokenGenerator, IRefreshTokenRepository tokenRepository, IOnboardingService onboardingService, ILogger<AuthService> logger)
         {
             _userRepository = userRepository;
             _jwtTokenGenerator = jwtTokenGenerator;
             _tokenRepository = tokenRepository;
+            _onboardingService = onboardingService;
             _logger = logger;
         }
 
@@ -42,33 +37,33 @@ namespace OmmoBackend.Services.Implementations
         {
             _logger.LogInformation("Authentication started for {EmailOrPhone}", loginRequest.EmailOrPhone);
 
+            // Retrieve the user by their email or phone identifier from the request
+            var user = await _userRepository.FindByEmailOrPhoneAsync(loginRequest.EmailOrPhone);
+
+            // Check if the user exists
+            if (user == null)
+            {
+                _logger.LogWarning("Authentication failed for {EmailOrPhone}: User not found", loginRequest.EmailOrPhone);
+                return ServiceResponse<AuthResult>.ErrorResponse(ErrorMessages.InvalidCredentials, 401);
+            }
+
+            // Check if the user's status is active
+            if (!user.status.Equals(UserStatus.active))
+            {
+                _logger.LogWarning("Authentication failed for {EmailOrPhone}: User is not active", loginRequest.EmailOrPhone);
+                return ServiceResponse<AuthResult>.ErrorResponse("User is not allowed to log in. The account is not active.", 403);
+            }
+
+            // Check if the provided password matches the stored password hash
+            // If the password verification fails, return an unsuccessful authentication result
+            if (!VerifyHashPassword(loginRequest.Password, user.password_hash, user.password_salt))
+            {
+                _logger.LogWarning("Authentication failed for {EmailOrPhone}: Invalid password", loginRequest.EmailOrPhone);
+                return ServiceResponse<AuthResult>.ErrorResponse(ErrorMessages.InvalidCredentials, 401);
+            }
+
             try
             {
-                // Retrieve the user by their email or phone identifier from the request
-                var user = await _userRepository.FindByEmailOrPhoneAsync(loginRequest.EmailOrPhone);
-
-                // Check if the user exists
-                if (user == null)
-                {
-                    _logger.LogWarning("Authentication failed for {EmailOrPhone}: User not found", loginRequest.EmailOrPhone);
-                    return ServiceResponse<AuthResult>.ErrorResponse(ErrorMessages.InvalidCredentials, 401);
-                }
-
-                // Check if the user's status is active
-                if (!user.status.Equals(UserStatus.active))
-                {
-                    _logger.LogWarning("Authentication failed for {EmailOrPhone}: User is not active", loginRequest.EmailOrPhone);
-                    return ServiceResponse<AuthResult>.ErrorResponse("User is not allowed to log in. The account is not active.", 403);
-                }
-
-                // Check if the provided password matches the stored password hash
-                // If the password verification fails, return an unsuccessful authentication result
-                if (!VerifyHashPassword(loginRequest.Password, user.password_hash, user.password_salt))
-                {
-                    _logger.LogWarning("Authentication failed for {EmailOrPhone}: Invalid password", loginRequest.EmailOrPhone);
-                    return ServiceResponse<AuthResult>.ErrorResponse(ErrorMessages.InvalidCredentials, 401);
-                }
-
                 // Generate JWT token with embedded user information
                 // Generate JWT token (short-lived)
                 var token = _jwtTokenGenerator.GenerateToken(user);
@@ -79,15 +74,24 @@ namespace OmmoBackend.Services.Implementations
                 // Save Refresh Token to the database
                 await _tokenRepository.SaveRefreshTokenAsync(user.user_id, refreshToken);
 
+                var onboardingData = await _onboardingService.GetOnboardingDataAsync(user.company_id);
+
                 _logger.LogInformation("Authentication successful for {EmailOrPhone}", loginRequest.EmailOrPhone);
 
-                // Return the result with the generated token and success status
-                return ServiceResponse<AuthResult>.SuccessResponse(new AuthResult { Token = token, RefreshToken = refreshToken });
+                return ServiceResponse<AuthResult>.SuccessResponse(new AuthResult
+                {
+                    Token = token,
+                    RefreshToken = refreshToken,
+                    OnboardingAuthDto = onboardingData
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred during authentication for {EmailOrPhone}", loginRequest.EmailOrPhone);
-                return ServiceResponse<AuthResult>.ErrorResponse(ErrorMessages.ServerDown, 503);
+                _logger.LogError(ex,
+                       "Critical failure during authentication pipeline for {EmailOrPhone}",
+                       loginRequest.EmailOrPhone);
+
+                throw;
             }
         }
 
@@ -104,34 +108,31 @@ namespace OmmoBackend.Services.Implementations
 
         public async Task<ServiceResponse<AuthResult>> RefreshTokenAsync(string refreshToken)
         {
-            _logger.LogInformation("Refreshing token for {RefreshToken}", refreshToken);
+            _logger.LogInformation("Refreshing token request received");
 
             try
             {
-                var tokenEntity = await _tokenRepository.GetRefreshTokenAsync(refreshToken);
+                var tokenEntity = await _tokenRepository.ConsumeRefreshTokenAsync(refreshToken);
 
                 if (tokenEntity == null || tokenEntity.expiration_time < DateTime.Now)
                 {
-                    _logger.LogWarning("Token refresh failed: Invalid or expired refresh token {RefreshToken}", refreshToken);
-                    //return ServiceResponse<AuthResult>.ErrorResponse("Token refresh failed. Invalid or expired refresh token.");
-                    return ServiceResponse<AuthResult>.ErrorResponse("Token refresh failed. Invalid or expired refresh token.", 401);
+                    _logger.LogWarning("Token reuse detected or invalid token");
+                    return ServiceResponse<AuthResult>.ErrorResponse(
+                        "Invalid or already used refresh token.", 401);
                 }
 
                 var user = await _userRepository.GetByIdAsync(tokenEntity.user_id);
                 if (user == null)
                 {
-                    _logger.LogWarning("User not found for refresh token {RefreshToken}", refreshToken);
+                    _logger.LogWarning("User not found for refresh token");
                     return ServiceResponse<AuthResult>.ErrorResponse("User not found.", 404);
                 }
 
                 // Generate a new JWT token
                 var newAccessToken = _jwtTokenGenerator.GenerateToken(user!);
 
-                // Optionally: Generate a new refresh token
+                // Generate a new refresh token
                 var newRefreshToken = GenerateRefreshToken();
-
-                // Revoke the old refresh token
-                await _tokenRepository.RevokeRefreshTokenAsync(refreshToken);
 
                 // Save the new refresh token
                 await _tokenRepository.SaveRefreshTokenAsync(user!.user_id, newRefreshToken);
@@ -140,30 +141,29 @@ namespace OmmoBackend.Services.Implementations
 
                 return ServiceResponse<AuthResult>.SuccessResponse(new AuthResult
                 {
-                    Success = true,
                     Token = newAccessToken,
                     RefreshToken = newRefreshToken
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred while refreshing token {RefreshToken}", refreshToken);
+                _logger.LogError(ex, "An error occurred while refreshing token");
                 return ServiceResponse<AuthResult>.ErrorResponse(ErrorMessages.OperationFailed);
             }
         }
 
         public async Task<ServiceResponse<bool>> RevokeRefreshTokenAsync(string refreshToken)
         {
-            _logger.LogInformation("Revoking refresh token {RefreshToken}", refreshToken);
+            _logger.LogInformation("Revoking refresh token");
 
-            var tokenEntity = await _tokenRepository.GetRefreshTokenAsync(refreshToken);
-            if (tokenEntity == null)
+            var result = await _tokenRepository.TryRevokeRefreshTokenAsync(refreshToken);
+
+            if (!result)
             {
-                _logger.LogWarning("Refresh token not found {RefreshToken}", refreshToken);
-                return ServiceResponse<bool>.ErrorResponse("Refresh token not found.", 404);
+                _logger.LogWarning("Token not found during logout");
+                return ServiceResponse<bool>.SuccessResponse(true);
             }
 
-            await _tokenRepository.RevokeRefreshTokenAsync(refreshToken);
             return ServiceResponse<bool>.SuccessResponse(true);
         }
 

@@ -9,15 +9,21 @@
         public string Destination { get; set; } = string.Empty;
         public DateTime FromDate { get; set; }
         public DateTime ToDate { get; set; }
+        public int wieght { get; set; }
+        public int length { get; set; }
+        public string Commodity { get; set; }
+        public string Equipment_Type { get; set; }
+
+
+        //Add Equipment_Type. into Payload as String Array
+
+        public string Reference_ID { get; set; }
 
         // Client info
         public string ClientPhone { get; set; } = string.Empty;
         public string ClientEmail { get; set; } = string.Empty;
         public string ClientCompany { get; set; } = string.Empty;
 
-        // Loadboard / matching
-        public Guid? MatchId { get; set; }         // nullable because sometimes may not exist
-        public string? TruckstopId { get; set; }   // keep as string if ID may contain non-numeric chars
         public string LoadboardType { get; set; } = string.Empty; // "DAT" or "Truckstop"
     }
 
@@ -27,8 +33,14 @@
     decimal LoadRpm,
     string Origin,
     string Destination,
+    string Reference_ID,
     DateTime FromDate,
-    DateTime ToDate
+    DateTime ToDate,
+    int wieght,
+    int length,
+    string commodity,
+    string equipment_type
+   
     );
 
     public record ClientInfo(

@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OmmoBackend.Dtos;
@@ -33,44 +29,44 @@ namespace OmmoBackend.Controllers
             _logger = logger;
         }
 
-        [HttpPost]
-        [Route("create-company")]
-        [AllowAnonymous]
-        public async Task<IActionResult> CreateCompany([FromBody] CreateCompanyRequest createCompanyRequest)
-        {
-            if (!ModelState.IsValid)
-            {
-                var firstError = ModelState
-                    .Where(ms => ms.Value.Errors.Any())
-                    .Select(ms => ms.Value.Errors.First().ErrorMessage)
-                    .FirstOrDefault();
+        //[HttpPost]
+        //[Route("create-company")]
+        //[AllowAnonymous]
+        //public async Task<IActionResult> CreateCompany([FromBody] CreateCompanyRequest createCompanyRequest)
+        //{
+        //    if (!ModelState.IsValid)
+        //    {
+        //        var firstError = ModelState
+        //            .Where(ms => ms.Value.Errors.Any())
+        //            .Select(ms => ms.Value.Errors.First().ErrorMessage)
+        //            .FirstOrDefault();
 
-                return ApiResponse.Error(firstError, 400);
-            }
+        //        return ApiResponse.Error(firstError, 400);
+        //    }
 
-            try
-            {
-                _logger.LogInformation("Creating company with name: {CompanyName}", createCompanyRequest.Name);
+        //    try
+        //    {
+        //        _logger.LogInformation("Creating company with name: {CompanyName}", createCompanyRequest.Name);
 
-                // Call the service layer to create the company asynchronously
-                var companyCreationResult = await _companyService.CreateCompanyAsync(createCompanyRequest);
+        //        // Call the service layer to create the company asynchronously
+        //        var companyCreationResult = await _companyService.CreateCompanyAsync(createCompanyRequest);
 
-                // Check if the company creation was successful; if not, return the error message
-                if (!companyCreationResult.Success)
-                {
-                    _logger.LogWarning("Company creation failed: {ErrorMessage}", companyCreationResult.ErrorMessage);
-                    return ApiResponse.Error(companyCreationResult.ErrorMessage, companyCreationResult.StatusCode);
-                }
+        //        // Check if the company creation was successful; if not, return the error message
+        //        if (!companyCreationResult.Success)
+        //        {
+        //            _logger.LogWarning("Company creation failed: {ErrorMessage}", companyCreationResult.ErrorMessage);
+        //            return ApiResponse.Error(companyCreationResult.ErrorMessage, companyCreationResult.StatusCode);
+        //        }
 
-                _logger.LogInformation("Company created successfully with ID: {CompanyId}", companyCreationResult.Data.CompanyId);
-                return ApiResponse.Success(new { companyId = companyCreationResult.Data.CompanyId }, companyCreationResult.Message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An error occurred while creating the company.");
-                return ApiResponse.Error(ErrorMessages.ServerDown, 503);
-            }
-        }
+        //        _logger.LogInformation("Company created successfully with ID: {CompanyId}", companyCreationResult.Data.CompanyId);
+        //        return ApiResponse.Success(new { companyId = companyCreationResult.Data.CompanyId }, companyCreationResult.Message);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "An error occurred while creating the company.");
+        //        return ApiResponse.Error(ErrorMessages.ServerDown, 503);
+        //    }
+        //}
 
 
         // [HttpPost]
@@ -118,7 +114,6 @@ namespace OmmoBackend.Controllers
         //     // Return a success response if the child company was removed successfully
         //     return Ok(new { message = "Child company removed successfully" });
         // }
-
 
         [HttpGet]
         [Route("get-company-profile")]

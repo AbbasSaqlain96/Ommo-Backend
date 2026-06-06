@@ -1,16 +1,12 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using OmmoBackend.Data;
 using OmmoBackend.Dtos;
-using OmmoBackend.Exceptions;
 using OmmoBackend.Helpers.Enums;
 using OmmoBackend.Helpers.Responses;
 using OmmoBackend.Helpers.Utilities;
 using OmmoBackend.Models;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Interfaces;
-using System.ComponentModel.Design;
-using System.Numerics;
 
 namespace OmmoBackend.Services.Implementations
 {
@@ -24,7 +20,14 @@ namespace OmmoBackend.Services.Implementations
         private readonly IUnitOfWork _unitOfWork;
         private readonly ICarrierRepository _carrierRepository;
         private readonly IConfiguration _configuration;
-
+        private readonly ICompanyOnboardingService _companyOnboardingService;
+        private readonly IUltravoxService _ultravoxService;
+        private readonly IAIAgentService _aIAgentService;
+        private readonly IAIAgentSettingService _aIAgentSettingService;
+        private readonly IOnboardingRepository _onboardingRepository;
+        private readonly IQuestionnaireRepository _questionnaireRepository;
+        private readonly IEmailService _emailService;
+        private readonly ILogger<OnboardingService> _logger;
         public OnboardingService(
             ICompanyRepository companyRepository,
             ICompanyService companyService,
@@ -33,7 +36,15 @@ namespace OmmoBackend.Services.Implementations
             AppDbContext dbContext,
             IUnitOfWork unitOfWork,
             ICarrierRepository carrierRepository,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ICompanyOnboardingService companyOnboardingService,
+            IUltravoxService ultravoxService,
+            IAIAgentService aIAgentService,
+            IAIAgentSettingService aIAgentSettingService,
+            IOnboardingRepository onboardingRepository,
+            IQuestionnaireRepository questionnaireRepository,
+            IEmailService emailService,
+            ILogger<OnboardingService> logger)
         {
             _companyRepository = companyRepository;
             _companyService = companyService;
@@ -43,6 +54,14 @@ namespace OmmoBackend.Services.Implementations
             _unitOfWork = unitOfWork;
             _carrierRepository = carrierRepository;
             _configuration = configuration;
+            _companyOnboardingService = companyOnboardingService;
+            _ultravoxService = ultravoxService;
+            _aIAgentService = aIAgentService;
+            _aIAgentSettingService = aIAgentSettingService;
+            _onboardingRepository = onboardingRepository;
+            _questionnaireRepository = questionnaireRepository;
+            _emailService = emailService;
+            _logger = logger;
         }
 
         private async Task<string> UploadCompanyLogo(IFormFile companyLogo, int companyId)
@@ -167,6 +186,8 @@ namespace OmmoBackend.Services.Implementations
 
         public async Task<ServiceResponse<SignupCompanyResponse>> SignupCompanyAsync(SignupCompanyRequest request)
         {
+            _logger.LogInformation("Starting company signup for Email: {Email}", request.Email);
+
             // Check for company duplicates
             var duplicateCheckResultForCompanyEntity = await _companyService.CheckDuplicateEmailAndPhoneAsync(request.Email, request.Phone);
             if (duplicateCheckResultForCompanyEntity.HasDuplicate)
@@ -229,6 +250,8 @@ namespace OmmoBackend.Services.Implementations
                         category_type = 1,
                         status = CompanyStatus.active,
                         twilio_number = null,
+                        is_verified = false,
+                        verification_status = VerificationStatus.pending,
                         created_at = DateTime.UtcNow
                     };
 
@@ -287,26 +310,203 @@ namespace OmmoBackend.Services.Implementations
                     recentUser.profile_image_url = profilePictureUrl;
                     await _userRepository.UpdateAsync(user);
 
+                    // STEP 3 — Company Onboarding
+                    await _companyOnboardingService.AddCompanyOnboardingAsync(company.company_id);
+
+                    // STEP 4 — Create Ultravox Agent
+                    var agentGuid = await _ultravoxService.CreateAgentAsync(company.company_id);
+
+                    // STEP 5 — Insert into agent table
+                    await _aIAgentService.AddAgentAsync(agentGuid, company.company_id);
+
+                    // STEP 6 — Insert agent settings
+                    await _aIAgentSettingService.AddAgentSettingAsync(agentGuid);
+
                     await transaction.CommitAsync();
+
+                    try
+                    {
+                        await _emailService.SendWelcomeVerificationEmailAsync(
+                            company.email,
+                            company.name
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "Failed to send welcome email for CompanyId: {CompanyId}",
+                            company.company_id);
+                    }
+
+                    _logger.LogInformation("Company signup completed successfully for CompanyId: {CompanyId}", company.company_id);
 
                     return new ServiceResponse<SignupCompanyResponse>
                     {
                         Data = new SignupCompanyResponse
                         {
-                            CompanyId = company.company_id,
-                            UserId = user.user_id,
-                            Message = "Company and first user created successfully."
+                            OnboardingDto = new OnboardingDto
+                            {
+                                IsCompleted = false,
+                                CurrentStep = OnboardingStep.verification
+                            }
                         },
                         Success = true,
-                        Message = "Company and first user created successfully."
+                        Message = "Company created successfully."
                     };
                 }
                 catch (Exception ex)
                 {
                     await transaction.RollbackAsync();
-                    return ServiceResponse<SignupCompanyResponse>.ErrorResponse("Server is temporarily unavailable. Please try again later.", 503);
+
+                    _logger.LogError(ex,
+                        "Transaction failed during SignupCompany. Email: {Email}, CompanyName: {CompanyName}",
+                        request.Email,
+                        request.CompanyName);
+
+                    throw;
                 }
             });
+        }
+
+        public async Task<OnboardingAuthDto> GetOnboardingDataAsync(int companyId)
+        {
+            try
+            {
+                _logger.LogInformation("Fetching onboarding data for CompanyId: {CompanyId}", companyId);
+
+                var data = await _onboardingRepository.GetOnboardingDataAsync(companyId);
+
+                if (data == null)
+                {
+                    _logger.LogInformation("No onboarding/payment data found for CompanyId: {CompanyId}", companyId);
+
+                    return new OnboardingAuthDto
+                    {
+                        IsCompleted = null,
+                        CurrentStep = null,
+                        SubscriptionStatus = null
+                    };
+                }
+
+                return data;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to fetch onboarding data for CompanyId: {CompanyId}",
+                    companyId);
+
+                throw;
+            }
+        }
+
+        public async Task<ServiceResponse<string>> CompleteQuestionnaireAsync(
+            int companyId,
+            List<QuestionnaireAnswerRequest> request)
+        {
+            _logger.LogInformation("Starting questionnaire completion for CompanyId {CompanyId}", companyId);
+
+
+            // =========================
+            // Validation
+            // =========================
+
+            if (request == null || request.Count != 3)
+            {
+                _logger.LogWarning("Invalid questionnaire count for CompanyId {CompanyId}", companyId);
+
+                return ServiceResponse<string>.ErrorResponse(
+                    "Invalid request. Exactly 3 answers required with question_number 1, 2, and 3.", 400);
+            }
+
+            var validSet = new HashSet<int> { 1, 2, 3 };
+            var requestSet = request.Select(x => x.QuestionNumber).ToHashSet();
+
+            if (!validSet.SetEquals(requestSet))
+            {
+                _logger.LogWarning("Invalid question numbers for CompanyId {CompanyId}", companyId);
+
+                return ServiceResponse<string>.ErrorResponse(
+                    "Invalid question numbers. Must include exactly 1, 2, and 3.", 400);
+            }
+
+            if (request.Any(x => string.IsNullOrWhiteSpace(x.AnswerText)))
+            {
+                _logger.LogWarning("Empty answer detected for CompanyId {CompanyId}", companyId);
+
+                return ServiceResponse<string>.ErrorResponse(
+                    "Answer text cannot be empty.", 400);
+            }
+
+            // =========================
+            // Transaction
+            // =========================
+
+            var strategy = _dbContext.Database.CreateExecutionStrategy();
+
+            return await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _unitOfWork.BeginTransactionAsync();
+
+                try
+                {
+                    // =========================
+                    // UPSERT
+                    // =========================
+
+                    _logger.LogInformation("Upserting questionnaire answers for CompanyId {CompanyId}", companyId);
+
+                    await _questionnaireRepository.UpsertAnswersAsync(companyId, request);
+
+                    // =========================
+                    // Update onboarding
+                    // =========================
+
+                    _logger.LogInformation("Updating onboarding step for CompanyId {CompanyId}", companyId);
+
+                    await _onboardingRepository.UpdateToIntegrationStepAsync(companyId);
+
+                    await transaction.CommitAsync();
+
+                    _logger.LogInformation("Questionnaire completed successfully for CompanyId {CompanyId}", companyId);
+
+                    return ServiceResponse<string>.SuccessResponse(null,
+                        "Questionnaire submitted successfully.");
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+
+                    _logger.LogError(ex,
+                        "Transaction failed during questionnaire completion for CompanyId {CompanyId}",
+                        companyId);
+
+                    throw;
+                }
+            });
+        }
+
+        public async Task<ServiceResponse<string>> AdvanceToPaymentStepAsync(int companyId)
+        {
+            _logger.LogInformation("Advancing onboarding to payment step for CompanyId {CompanyId}", companyId);
+
+            try
+            {
+                await _onboardingRepository.UpdateToPaymentStepAsync(companyId);
+
+                _logger.LogInformation("Onboarding advanced to payment step successfully for CompanyId {CompanyId}", companyId);
+                
+                return ServiceResponse<string>.SuccessResponse(null,
+                    "Onboarding advanced to payment step successfully.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to advance onboarding to payment step for CompanyId {CompanyId}",
+                    companyId);
+                
+                throw;
+            }
         }
     }
 }

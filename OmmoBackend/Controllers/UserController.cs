@@ -133,8 +133,7 @@ namespace OmmoBackend.Controllers
         [HttpPost]
         [Route("create-user")]
         [Authorize]
-        public async Task<IActionResult> CreateUser(
-            [FromForm] CreateUserRequest createUserRequest)
+        public async Task<IActionResult> CreateUser([FromForm] CreateUserRequest createUserRequest)
         {
             // Check if the request model state is valid
             if (!ModelState.IsValid)
@@ -150,13 +149,8 @@ namespace OmmoBackend.Controllers
             try
             {
                 // Get the logged-in user's company ID from claims
-                int companyId = int.Parse(User.Claims.FirstOrDefault(c => c.Type == "Company_ID")?.Value ?? "0");
-
-                if (companyId <= 0)
-                {
-                    _logger.LogWarning("Invalid Company ID in token.");
-                    return ApiResponse.Error("You do not have permission to access this resource", 401);
-                }
+                if (!TokenHelper.TryGetCompanyId(User, _logger, out int companyId, out IActionResult? error))
+                    return error;
 
                 _logger.LogInformation("Creating user for Company ID: {CompanyId}", companyId);
 
@@ -199,14 +193,10 @@ namespace OmmoBackend.Controllers
                 }
 
                 // Get the logged-in user's company ID from claims
-                int loggedInCompanyId = int.Parse(User.Claims.FirstOrDefault(c => c.Type == "Company_ID")?.Value ?? "0");
-                if (loggedInCompanyId <= 0)
-                {
-                    _logger.LogWarning("Invalid Company ID in token.");
-                    return ApiResponse.Error("You do not have permission to access this resource", 401);
-                }
+                if (!TokenHelper.TryGetCompanyId(User, _logger, out int companyId, out IActionResult? error))
+                    return error;
 
-                _logger.LogInformation("User update initiated by Company ID: {CompanyId} for User ID: {UserId}", loggedInCompanyId, updateUserRequest.UserId);
+                _logger.LogInformation("User update initiated by Company ID: {CompanyId} for User ID: {UserId}", companyId, updateUserRequest.UserId);
 
                 // Get the company ID of the user being updated
                 int targetUserCompanyId;
@@ -226,10 +216,10 @@ namespace OmmoBackend.Controllers
                 }
 
                 // Ensure the user being updated belongs to the same company
-                if (loggedInCompanyId != targetUserCompanyId)
+                if (companyId != targetUserCompanyId)
                 {
                     _logger.LogWarning("Unauthorized update attempt. Company ID: {LoggedInCompanyId} tried to update User ID: {UserId} from Company ID: {TargetUserCompanyId}",
-                        loggedInCompanyId, updateUserRequest.UserId, targetUserCompanyId);
+                        companyId, updateUserRequest.UserId, targetUserCompanyId);
                     return ApiResponse.Error("Invalid User. The provided User ID does not exist", 400);
                 }
 

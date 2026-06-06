@@ -50,7 +50,7 @@ namespace OmmoBackend.Services.Implementations
                     issuer: _configuration["Jwt:Issuer"],
                     audience: _configuration["Jwt:Audience"],
                     claims: claims,
-                    expires: DateTime.Now.AddMinutes(7),
+                    expires: DateTime.Now.AddMinutes(30),
                     signingCredentials: creds
                 );
 

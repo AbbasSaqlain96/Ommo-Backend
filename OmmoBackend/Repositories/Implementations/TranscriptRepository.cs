@@ -14,7 +14,7 @@ namespace OmmoBackend.Repositories.Implementations
             _dbContext = dbContext;
         }
 
-        public async Task<List<CallTranscript>> GetByCallIdAsync(int callId)
+        public async Task<List<CallTranscript>> GetByCallIdAsync(Guid callId)
         {
             return await _dbContext.call_transcript
                 .Where(t => t.call_id == callId)

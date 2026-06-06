@@ -1,8 +1,3 @@
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using OmmoBackend.Data;
 using OmmoBackend.Dtos;
@@ -251,13 +246,22 @@ namespace OmmoBackend.Repositories.Implementations
 
         public async Task<CompanyDialInfoDto?> GetCompanyDialInfoAsync(int companyId)
         {
-
             return await _dbContext.company
-            .AsNoTracking()
-            .Where(c => c.company_id == companyId)
-            .Select(c => new CompanyDialInfoDto(c.name, c.twilio_number ?? ""))
-            .FirstOrDefaultAsync();
+                .AsNoTracking()
+                .Where(c => c.company_id == companyId)
+                .Join(
+                    _dbContext.carrier.AsNoTracking(),
+                    c => c.company_id,
+                    cr => cr.company_id,
+                    (c, cr) => new CompanyDialInfoDto(
+                        c.name,
+                        c.twilio_number ?? "",
+                        cr.mc_number ?? ""
+                    )
+                )
+                .FirstOrDefaultAsync();
         }
+
         public async Task<CompanyProfileDto> GetCompanyProfileAsync(int companyId)
         {
             try
@@ -336,6 +340,31 @@ namespace OmmoBackend.Repositories.Implementations
                 _logger.LogError(ex, "Error occurred while checking if CompanyId: {CompanyId} exists", companyId);
                 throw;
             }
+        }
+
+        public async Task UpdatePhoneNumberAsync(int companyId, string phoneNumber)
+        {
+            await _dbContext.company
+                .Where(x => x.company_id == companyId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.phone, phoneNumber)
+                );
+        }
+
+        public async Task<string?> GetCompanyEmailAsync(int companyId)
+        {
+            return await _dbContext.company
+                .Where(c => c.company_id == companyId)
+                .Select(c => c.email)
+                .FirstOrDefaultAsync();
+        }
+
+        public async Task<bool> IsCompanyVerifiedAsync(int companyId)
+        {
+            return await _dbContext.company
+                .Where(c => c.company_id == companyId)
+                .Select(c => c.is_verified)
+                .FirstOrDefaultAsync();
         }
     }
 }

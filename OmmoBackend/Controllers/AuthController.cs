@@ -1,15 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using OmmoBackend.Dtos;
 using OmmoBackend.Helpers.Constants;
 using OmmoBackend.Helpers.Responses;
 using OmmoBackend.Services.Interfaces;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Security.Claims;
-using System.Threading.Tasks;
 
 namespace OmmoBackend.Controllers
 {
@@ -54,7 +49,9 @@ namespace OmmoBackend.Controllers
                 // If authentication fails, return a 401 Unauthorized response with an error message
                 if (!result.Success)
                 {
-                    _logger.LogWarning("Unauthorized login attempt for Email/Phone: {EmailOrPhone}", loginRequest.EmailOrPhone);
+                    _logger.LogWarning("Login failed for {EmailOrPhone}: {Reason}", 
+                        loginRequest.EmailOrPhone,
+                        result.ErrorMessage);
 
                     // If user is not active, return a 403 Forbidden (user is not allowed to login)
                     if (result.ErrorMessage.Contains("not active"))
@@ -65,10 +62,22 @@ namespace OmmoBackend.Controllers
                     return ApiResponse.Error(result.ErrorMessage, result.StatusCode);
                 }
 
-                _logger.LogInformation("Successful login for Email/Phone: {EmailOrPhone}", loginRequest.EmailOrPhone);
+                _logger.LogInformation("Login successful for {EmailOrPhone}", loginRequest.EmailOrPhone);
 
-                // If authentication succeeds, return a 200 OK response with the generated token
-                return ApiResponse.Success(new { token = result.Data.Token, refreshToken = result.Data.RefreshToken }, "Login successful.");
+                return ApiResponse.Success(
+                    new
+                    {
+                        token = result.Data.Token,
+                        refreshToken = result.Data.RefreshToken,
+                        onboarding = new
+                        {
+                            is_completed = result.Data.OnboardingAuthDto.IsCompleted,
+                            current_step = result.Data.OnboardingAuthDto.CurrentStep,
+                            subscription_status = result.Data.OnboardingAuthDto.SubscriptionStatus
+                        }
+                    },
+                    "Login successful."
+                );
             }
             catch (Exception ex)
             {
@@ -78,6 +87,7 @@ namespace OmmoBackend.Controllers
         }
 
         [HttpPost("refresh-token")]
+        [AllowAnonymous]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             _logger.LogInformation("Refresh token request received.");
@@ -93,7 +103,7 @@ namespace OmmoBackend.Controllers
             {
                 var result = await _authService.RefreshTokenAsync(request.RefreshToken);
 
-                if (!result.Success) 
+                if (!result.Success)
                 {
                     _logger.LogWarning("Invalid or expired refresh token provided.");
                     return ApiResponse.Error(result.ErrorMessage, result.StatusCode);
@@ -164,7 +174,7 @@ namespace OmmoBackend.Controllers
             var resp = await _userService.ConfirmPasswordResetAsync(dto);
             return resp.Success
                 ? ApiResponse.Success(null, resp.Message)
-                : ApiResponse.Error(resp.ErrorMessage, resp.StatusCode); 
+                : ApiResponse.Error(resp.ErrorMessage, resp.StatusCode);
         }
 
         [HttpPost("authenticate")]

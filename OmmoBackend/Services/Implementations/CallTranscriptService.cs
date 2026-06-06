@@ -16,7 +16,7 @@ namespace OmmoBackend.Services.Implementations
             _transcriptRepo = transcriptRepo;
         }
 
-        public async Task<ServiceResponse<List<CallTranscriptLineDto>>> GetTranscriptAsync(int callId, int companyId)
+      /*  public async Task<ServiceResponse<List<CallTranscriptLineDto>>> GetTranscriptAsync(Guid callId, int companyId)
         {
             var call = await _callRepo.GetByIdAsync(callId);
             if (call == null)
@@ -37,6 +37,6 @@ namespace OmmoBackend.Services.Implementations
                 }).ToList();
 
             return ServiceResponse<List<CallTranscriptLineDto>>.SuccessResponse(result);
-        }
+        }*/
     }
 }

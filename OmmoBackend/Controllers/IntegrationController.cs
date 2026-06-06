@@ -110,14 +110,14 @@ namespace OmmoBackend.Controllers
         }
 
         [HttpPatch("toggle-integration-status")]
-        public async Task<IActionResult> ToggleStatus([FromBody] ToggleIntegrationStatusRequest request)
+        public async Task<IActionResult> ToggleStatus(int integrationId)
         {
-            var serviceResponse = await _integrationService.ToggleStatusAsync(request);
-
-            if (!serviceResponse.Success)
-                return ApiResponse.Error(serviceResponse.ErrorMessage, serviceResponse.StatusCode);
-
-            return ApiResponse.Success(serviceResponse.Data, serviceResponse.Message);
+            var response = await _integrationService.ToggleIntegrationStatusAsync(integrationId);
+            
+            if (!response.Success)
+                return ApiResponse.Error(response.ErrorMessage, response.StatusCode);
+            
+            return ApiResponse.Success(response.Data, response.Message);
         }
     }
 }

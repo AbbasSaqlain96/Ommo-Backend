@@ -1,4 +1,4 @@
-using FluentValidation.AspNetCore;
+﻿using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
@@ -9,6 +9,7 @@ using Microsoft.OpenApi.Models;
 using Npgsql;
 using OmmoBackend.Data;
 using OmmoBackend.Exceptions;
+using OmmoBackend.Handlers;
 using OmmoBackend.Helpers;
 using OmmoBackend.Helpers.Enums;
 using OmmoBackend.Hubs;
@@ -17,16 +18,19 @@ using OmmoBackend.Repositories.Implementations;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Implementations;
 using OmmoBackend.Services.Interfaces;
+using OmmoBackend.Services.Interfaces.Stripe;
+using OmmoBackend.Services.Implementations.Stripe;
 using OmmoBackend.Validators;
-using OpenTelemetry.Metrics;
 using Serilog;
 using System.Security.Claims;
 using System.Text;
-
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args); // Create a builder for configuring the web application
 
-// var logPath = builder.Configuration["Logging:LogPath"] ?? Path.Combine(builder.Environment.ContentRootPath, "Logs");
+Stripe.StripeConfiguration.ApiKey =
+    builder.Configuration["Stripe:SecretKey"];
+
 var logPath = builder.Configuration["Logging:LogPath"] ?? "Logs";
 
 if (!Directory.Exists(logPath))
@@ -46,7 +50,12 @@ builder.Services.AddSignalR();
 
 // Add services to the container.
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters
+        .Add(new JsonStringEnumConverter());
+    });
 
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
@@ -65,7 +74,7 @@ builder.Services.AddFluentValidation(fv =>
     fv.RegisterValidatorsFromAssemblyContaining<CreateSubscriptionRequestValidator>();
     //    fv.RegisterValidatorsFromAssemblyContaining<EmailValidationAttribute>();
     //    fv.RegisterValidatorsFromAssemblyContaining<MCNumberValidationAttribute>();
-        fv.RegisterValidatorsFromAssemblyContaining<VerifyOtpRequestValidator>();
+    fv.RegisterValidatorsFromAssemblyContaining<VerifyOtpRequestValidator>();
 });
 
 
@@ -96,15 +105,6 @@ builder.Services.AddSwaggerGen(option =>
         }
     });
 });
-
-// Add OpenTelemetry here
-builder.Services.AddOpenTelemetry()
-    .WithMetrics(metrics =>
-    {
-        metrics.AddAspNetCoreInstrumentation()
-               .AddHttpClientInstrumentation()
-                .AddPrometheusExporter();
-    });
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(
@@ -148,7 +148,7 @@ builder.Services.AddScoped<IOtpVerificationService, OtpVerificationService>();
 //builder.Services.AddScoped<IMaintenanceIssueService, MaintenanceIssueService>();
 builder.Services.AddScoped<IIssueTicketService, IssueTicketService>();
 builder.Services.AddScoped<IModuleService, ModuleService>();
-//builder.Services.AddScoped<IAIAgentService, AIAgentService>();
+builder.Services.AddScoped<IAIAgentService, AIAgentService>();
 //builder.Services.AddScoped<ICallTranscriptService, CallTranscriptService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<IRoleModuleService, RoleModuleService>();
@@ -170,13 +170,33 @@ builder.Services.AddScoped<IIntegrationService, IntegrationService>();
 builder.Services.AddScoped<ILoadBoardService, LoadBoardService>();
 builder.Services.AddScoped<ICallService, CallService>();
 builder.Services.AddScoped<ITokenValidationService, TokenValidationService>();
+builder.Services.AddScoped<IAiInsightsService, AiInsightsService>();
+builder.Services.AddScoped<IAIAgentSettingService, AIAgentSettingService>();
+builder.Services.AddScoped<ICompanyOnboardingService, CompanyOnboardingService>();
+builder.Services.AddScoped<IPlansService, PlansService>();
+builder.Services.AddScoped<IBillingService, BillingService>();
+builder.Services.AddScoped<ICallSettingsService, CallSettingsService>();
+builder.Services.AddScoped<ISupportService, SupportService>();
+builder.Services.AddScoped<IStripeBillingService, StripeBillingService>();
+builder.Services.AddScoped<IPackagePlanValidationService, PackagePlanValidationService>();
+builder.Services.AddScoped<IPeriodCalculationService, PeriodCalculationService>();
+builder.Services.AddScoped<IAlertService, AlertService>();
+builder.Services.AddScoped<IStripeMetadataService, StripeMetadataService>();
+
+builder.Services.AddScoped<IStripeEventHandler, CheckoutSessionCompletedHandler>();
+builder.Services.AddScoped<IStripeEventHandler, InvoicePaidHandler>();
+builder.Services.AddScoped<IStripeEventHandler, InvoicePaymentFailedHandler>();
+builder.Services.AddScoped<IStripeEventHandler, SubscriptionDeletedHandler>();
+
+builder.Services.Configure<StripeSettings>(
+    builder.Configuration.GetSection("Stripe"));
 
 builder.Services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
 
 builder.Services.AddScoped<ICompanyRepository, CompanyRepository>();
 builder.Services.AddScoped<ICarrierRepository, CarrierRepository>();
 builder.Services.AddScoped<IDispatchServiceRepository, DispatchServiceRepository>();
-builder.Services.AddScoped<IAIAgentRepository,AIAgentRepository>();
+builder.Services.AddScoped<IAIAgentRepository, AIAgentRepository>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IRoleRepository, RoleRepository>();
 builder.Services.AddScoped<IModuleRepository, ModuleRepository>();
@@ -225,6 +245,19 @@ builder.Services.AddScoped<ISendEmailRepository, SendEmailRepository>();
 builder.Services.AddScoped<IIntegrationRepository, IntegrationRepository>();
 builder.Services.AddScoped<IGlobalIntegrationCredentialRepository, GlobalIntegrationCredentialRepository>();
 builder.Services.AddScoped<ICallRepository, CallRepository>();
+builder.Services.AddScoped<IDefaultIntegrationRepository, DefaultIntegrationRepository>();
+builder.Services.AddScoped<IAIAgentSettingRepository, AIAgentSettingRepository>();
+builder.Services.AddScoped<ICompanyOnboardingRepository, CompanyOnboardingRepository>();
+builder.Services.AddScoped<IOnboardingRepository, OnboardingRepository>();
+builder.Services.AddScoped<IQuestionnaireRepository, QuestionnaireRepository>();
+builder.Services.AddScoped<ICustomPackageRepository, CustomPackageRepository>();
+builder.Services.AddScoped<IPlanRepository, PlanRepository>();
+builder.Services.AddScoped<IBillingRepository, BillingRepository>();
+builder.Services.AddScoped<ICompanyPaymentProfileRepository, CompanyPaymentProfileRepository>();
+builder.Services.AddScoped<IPackagePlanRepository, PackagePlanRepository>();
+builder.Services.AddScoped<ISupportRequestRepository, SupportRequestRepository>();
+builder.Services.AddScoped<ICompanyPlanChangeRequestRepository, CompanyPlanChangeRequestRepository>();
+builder.Services.AddScoped<IStripeProcessedEventRepository, StripeProcessedEventRepository>();
 
 // UnitOfWork
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
@@ -232,10 +265,16 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 // configure HttpClient for Truckstop and DAT
 builder.Services.AddHttpClient();
 
+builder.Services.AddHttpClient<IUltravoxService, UltravoxService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10); // Fail fast
+});
+
 builder.Services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
 builder.Services.AddDataProtection().SetApplicationName("IntegrationEmailPoller");
 
 builder.Services.AddHostedService<IntegrationEmailPollerService>();
+builder.Services.AddHostedService<TranscriptPollingService>();
 
 // Configures Npgsql to use legacy timestamp behavior for compatibility
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
@@ -271,6 +310,12 @@ NpgsqlConnection.GlobalTypeMapper.MapEnum<FeesPaidBy>("fees_paid_by_enum");
 NpgsqlConnection.GlobalTypeMapper.MapEnum<DocInspectionStatus>("doc_inspection_status_enum");
 NpgsqlConnection.GlobalTypeMapper.MapEnum<InspectionLevel>("inspection_level_enum");
 NpgsqlConnection.GlobalTypeMapper.MapEnum<CitationStatus>("citation_enum");
+NpgsqlConnection.GlobalTypeMapper.MapEnum<OnboardingStep>("onboarding_step");
+NpgsqlConnection.GlobalTypeMapper.MapEnum<SubscriptionStatus>("subscription_status");
+NpgsqlConnection.GlobalTypeMapper.MapEnum<VerificationStatus>("verification_status");
+NpgsqlConnection.GlobalTypeMapper.MapEnum<PlanStatus>("plan_status");
+NpgsqlConnection.GlobalTypeMapper.MapEnum<PlanType>("plan_type");
+NpgsqlConnection.GlobalTypeMapper.MapEnum<PlanInterval>("plan_interval");
 
 builder.Services.AddCors(options =>
 {
@@ -282,8 +327,17 @@ builder.Services.AddCors(options =>
         .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
     });
 });
-
-
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("SignalRCors", policy =>
+    {
+        policy
+            .WithOrigins("https://ommo.ai", "http://localhost:5173")// 👈 frontend origin
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials(); // 👈 REQUIRED
+    });
+});
 
 // Add JWT authentication services
 builder.Services.AddAuthentication(options =>
@@ -306,100 +360,83 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-var app = builder.Build(); // Build the web application
+var app = builder.Build();
 
-
-// Expose Prometheus scraping endpoint at /metrics
-app.MapPrometheusScrapingEndpoint();
-
+// Use the global exception handler
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection(); // Redirect HTTP requests to HTTPS
-}
+//if (app.Environment.IsDevelopment())
+//{
+//  app.UseHttpsRedirection(); // Redirect HTTP requests to HTTPS
+//}
 
 app.UseSwagger(); // Enable Swagger
 app.UseSwaggerUI(); // Enable Swagger
 
-// var contentRoot = builder.Environment.ContentRootPath;
+//var contentRoot = builder.Environment.ContentRootPath;
 
-// // List of static folders you want to serve
-// string[] staticDirs = { "ProfilePicture", "Documents", "Logo" };
-
-// foreach (var dir in staticDirs)
-// {
-//     var fullPath = Path.Combine(contentRoot, dir);
-
-//     // Ensure directory exists
-//     if (!Directory.Exists(fullPath))
-//         Directory.CreateDirectory(fullPath);
-
-//     app.UseStaticFiles(new StaticFileOptions
-//     {
-//         FileProvider = new PhysicalFileProvider(fullPath),
-//         RequestPath = "/" + dir
-//     });
-// }
-
-// app.UseStaticFiles(new StaticFileOptions
-// {
+//app.UseStaticFiles(new StaticFileOptions
+//{
 //    FileProvider = new PhysicalFileProvider(Path.Combine(contentRoot, "ProfilePicture")),
 //    RequestPath = "/ProfilePicture"
-// });
+//});
 
-// app.UseStaticFiles(new StaticFileOptions
-// {
+//app.UseStaticFiles(new StaticFileOptions
+//{
 //    FileProvider = new PhysicalFileProvider(Path.Combine(contentRoot, "Documents")),
 //    RequestPath = "/Documents"
-// });
+//});
 
-// app.UseStaticFiles(new StaticFileOptions
-// {
+//app.UseStaticFiles(new StaticFileOptions
+//{
 //    FileProvider = new PhysicalFileProvider(Path.Combine(contentRoot, "Logo")),
 //    RequestPath = "/Logo"
-// });
+//});
 
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/ProfilePicture"),
-    // FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/ProfilePicture"),
+    //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/ProfilePicture"),
+    FileProvider = new PhysicalFileProvider("/IT Company/Ommo-Backend/OmmoBackend/ProfilePicture"),
     RequestPath = "/ProfilePicture"
 });
 
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Documents"),
-    // FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Documents"),
+    //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Documents"),
+    FileProvider = new PhysicalFileProvider("/IT Company/Ommo-Backend/OmmoBackend/Documents"),
     RequestPath = "/Documents"
 });
 
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Logo"),
-    // FileProvider = new PhysicalFileProvider("/IT Company/New/Ommo-Backend/OmmoBackend/Logo"),
+    //FileProvider = new PhysicalFileProvider("/var/www/ommo-backend/Logo"),
+    FileProvider = new PhysicalFileProvider("/IT Company/Ommo-Backend/OmmoBackend/Logo"),
     RequestPath = "/Logo"
 });
 
-app.UseSerilogRequestLogging(); // Log HTTP requests
+app.UseSerilogRequestLogging();
 
 app.UseRouting();
-app.UseMiddleware<JwtAuthenticationMiddleware>();
+
+app.UseCors("SignalRCors");
+
+app.UseAuthentication();
+
+app.UseAuthorization();
+
+app.UseMiddleware<RolePermissionMiddleware>();
 
 // Use Notification Middleware
 app.UseMiddleware<NotificationMiddleware>();
 
-app.UseExceptionHandler(); // Use the global exception handler
-
-app.UseAuthentication();  // Make sure authentication is set up
-app.UseCors();  // Allow CORS as set up
-app.UseAuthorization();  // Make sure authorization is enabled
-
 //app.UseStaticFiles(); // Enable serving static files from the wwwroot folder
-
-// Map SignalR hub
-app.MapHub<NotificationHub>("/notifications");
 
 app.MapControllers(); // Map attribute-routed controllers
 
-app.Run(); // Run the web application
+// Map SignalR hub
+app.MapHub<NotificationHub>("/notifications");
+app.MapHub<CallTranscriptHub>("/hubs/callTranscript");
+app.MapHub<UserChatHub>("/hubs/user-chat");
+
+app.Run();

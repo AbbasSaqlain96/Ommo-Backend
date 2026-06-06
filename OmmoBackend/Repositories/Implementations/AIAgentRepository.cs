@@ -14,12 +14,12 @@ namespace OmmoBackend.Repositories.Implementations
             _dbContext = dbContext;
         }
 
-        public async Task<Agent> RegisterAIAgentAsync(Agent agent)
-        {
-            _dbContext.agent.Add(agent);
-            await _dbContext.SaveChangesAsync();
-            return agent;
-        }
+        //public async Task<Agent> RegisterAIAgentAsync(Agent agent)
+        //{
+        //    _dbContext.agent.Add(agent);
+        //    await _dbContext.SaveChangesAsync();
+        //    return agent;
+        //}
         public async Task<AgentSettings?> GetAgentSettingsAsync(Guid agentGuid)
         {
             // Note: property name matches what you added: agent_settings
@@ -35,6 +35,42 @@ namespace OmmoBackend.Repositories.Implementations
                 .Where(a => a.company_id == companyId)
                 .Select(a => (Guid?)a.agent_guid)
                 .FirstOrDefaultAsync();
+        }
+
+        public async Task<(Agent, AgentSettings)> GetAgentWithSettingsByCompanyIdAsync(int companyId)
+        {
+            var agent = await _dbContext.agent.FirstOrDefaultAsync(x => x.company_id == companyId);
+                //.FindAsync(companyId);
+
+            if (agent == null)
+                return (null, null);
+
+            var settings = await _dbContext.agent_settings.FindAsync(agent.agent_guid);
+
+            return (agent, settings);
+        }
+
+        public async Task<Agent?> GetAgentByGuidAsync(Guid agentGuid)
+        {
+            return await _dbContext.agent.FindAsync(agentGuid);
+                //.FirstOrDefaultAsync(a => a.agent_guid == agentGuid);
+        }
+
+        public async Task<AgentSettings?> GetByAgentGuidAsync(Guid agentGuid)
+        {
+            return await _dbContext.agent_settings.FindAsync(agentGuid);
+        }
+
+        public async Task UpdateAsync(AgentSettings settings)
+        {
+            _dbContext.agent_settings.Update(settings);
+            await _dbContext.SaveChangesAsync();
+        }
+
+        public async Task AddAgentAsync(Agent agent)
+        {
+            await _dbContext.agent.AddAsync(agent);
+            await _dbContext.SaveChangesAsync();
         }
     }
 }

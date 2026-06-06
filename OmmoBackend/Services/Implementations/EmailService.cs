@@ -1,17 +1,15 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Net.Mail;
-using System.Threading.Tasks;
+﻿using MailKit.Security;
+using MimeKit;
 using OmmoBackend.Services.Interfaces;
 
 namespace OmmoBackend.Services.Implementations
 {
+    
     public class EmailService : IEmailService
     {
         private readonly IConfiguration _configuration;
         private readonly ILogger<EmailService> _logger;
+
         public EmailService(IConfiguration configuration, ILogger<EmailService> logger)
         {
             _configuration = configuration;
@@ -30,33 +28,22 @@ namespace OmmoBackend.Services.Implementations
                 var smtpPassword = _configuration["EmailSettings:Password"];
                 var emailFrom = _configuration["EmailSettings:EmailFrom"];
 
-                if (string.IsNullOrWhiteSpace(smtpServer) || string.IsNullOrWhiteSpace(emailFrom))
-                {
-                    _logger.LogError("SMTP configuration is missing or invalid.");
-                    throw new InvalidOperationException("SMTP configuration is missing.");
-                }
+                var message = new MimeMessage();
+                message.From.Add(new MailboxAddress("Ommo", emailFrom));
+                message.To.Add(MailboxAddress.Parse(toEmail));
+                message.Subject = "Ommo OTP";
 
-                using var smtpClient = new SmtpClient(smtpServer)
+                message.Body = new TextPart("html")
                 {
-                    Port = smtpPort,
-                    Credentials = new NetworkCredential(smtpUsername, smtpPassword),
-                    EnableSsl = true,
+                    Text = $"Your OTP is: <b>{otpCode}</b>"
                 };
 
-                var mailMessage = new MailMessage
-                {
-                    From = new MailAddress(emailFrom),
-                    Subject = "Ommo OTP",
-                    Body = $"Your OTP is: {otpCode}",
-                    IsBodyHtml = true,
-                };
+                using var client = new MailKit.Net.Smtp.SmtpClient();
 
-                mailMessage.To.Add(toEmail);
-
-                _logger.LogInformation("Sending OTP email to {ToEmail} with OTP: {OtpCode}", toEmail, otpCode);
-
-                // Sending email asynchronously
-                await smtpClient.SendMailAsync(mailMessage);
+                await client.ConnectAsync(smtpServer, smtpPort, SecureSocketOptions.StartTls);
+                await client.AuthenticateAsync(smtpUsername, smtpPassword);
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
 
                 _logger.LogInformation("OTP email successfully sent to {ToEmail}", toEmail);
             }
@@ -79,32 +66,22 @@ namespace OmmoBackend.Services.Implementations
                 var smtpPassword = _configuration["EmailSettings:Password"];
                 var emailFrom = _configuration["EmailSettings:EmailFrom"];
 
-                if (string.IsNullOrWhiteSpace(smtpServer) || string.IsNullOrWhiteSpace(emailFrom))
-                {
-                    _logger.LogError("SMTP configuration is missing or invalid.");
-                    throw new InvalidOperationException("SMTP configuration is missing.");
-                }
+                var message = new MimeMessage();
+                message.From.Add(new MailboxAddress("Ommo", emailFrom));
+                message.To.Add(MailboxAddress.Parse(to));
+                message.Subject = subject;
 
-                using var smtpClient = new SmtpClient(smtpServer)
+                message.Body = new TextPart("html")
                 {
-                    Port = smtpPort,
-                    Credentials = new NetworkCredential(smtpUsername, smtpPassword),
-                    EnableSsl = true,
+                    Text = body
                 };
 
-                var mailMessage = new MailMessage
-                {
-                    From = new MailAddress(emailFrom),
-                    Subject = subject,
-                    Body = body,
-                    IsBodyHtml = true, // Assume HTML is allowed; could make configurable
-                };
+                using var client = new MailKit.Net.Smtp.SmtpClient();
 
-                mailMessage.To.Add(to);
-
-                _logger.LogInformation("Sending email to {To} with subject: {Subject}", to, subject);
-
-                await smtpClient.SendMailAsync(mailMessage);
+                await client.ConnectAsync(smtpServer, smtpPort, SecureSocketOptions.StartTls);
+                await client.AuthenticateAsync(smtpUsername, smtpPassword);
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
 
                 _logger.LogInformation("Email successfully sent to {To}", to);
             }
@@ -113,6 +90,26 @@ namespace OmmoBackend.Services.Implementations
                 _logger.LogError(ex, "Failed to send email to {To}", to);
                 throw;
             }
+        }
+
+        public async Task SendWelcomeVerificationEmailAsync(string toEmail, string companyName)
+        {
+            var subject = "Welcome to ommo — Your account is being verified";
+
+            var body = $@"
+                Hi {companyName},
+                
+                Your company account has been successfully created on ommo.
+                
+                We are currently reviewing and verifying your account. This process typically takes 24 to 48 hours. Once verification is complete, you will receive a follow-up email and can continue with onboarding.
+                
+                If you have any questions in the meantime, feel free to reach out.
+                
+                Welcome aboard,<br/>
+                The ommo Team
+                ";
+
+            await SendAsync(toEmail, subject, body);
         }
     }
 }

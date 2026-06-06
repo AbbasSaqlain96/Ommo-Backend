@@ -4,7 +4,6 @@ using OmmoBackend.Dtos;
 using OmmoBackend.Helpers.Enums;
 using OmmoBackend.Helpers.Responses;
 using OmmoBackend.Models;
-using OmmoBackend.Repositories.Implementations;
 using OmmoBackend.Repositories.Interfaces;
 using OmmoBackend.Services.Interfaces;
 using System.Text.Json;
@@ -22,9 +21,10 @@ namespace OmmoBackend.Services.Implementations
         private readonly IEncryptionService _encryption;
         private readonly IGlobalIntegrationCredentialRepository _globalIntegrationCredentialRepository;
         private readonly IUnitOfWork _unitOfWork;
+        private readonly IOnboardingService _onboardingService;
         private readonly AppDbContext _dbContext;
 
-        public IntegrationService(IIntegrationRepository integrationRepository, IUserService userService, ILogger<IntegrationService> logger, IConfiguration config, IEmailService emailService, ISendEmailRepository sendEmailRepository, IEncryptionService encryption, IGlobalIntegrationCredentialRepository globalIntegrationCredentialRepository, IUnitOfWork unitOfWork, AppDbContext dbContext)
+        public IntegrationService(IIntegrationRepository integrationRepository, IUserService userService, ILogger<IntegrationService> logger, IConfiguration config, IEmailService emailService, ISendEmailRepository sendEmailRepository, IEncryptionService encryption, IGlobalIntegrationCredentialRepository globalIntegrationCredentialRepository, IUnitOfWork unitOfWork, IOnboardingService onboardingService, AppDbContext dbContext)
         {
             _integrationRepository = integrationRepository;
             _userService = userService;
@@ -35,6 +35,7 @@ namespace OmmoBackend.Services.Implementations
             _encryption = encryption;
             _globalIntegrationCredentialRepository = globalIntegrationCredentialRepository;
             _unitOfWork = unitOfWork;
+            _onboardingService = onboardingService;
             _dbContext = dbContext;
         }
 
@@ -103,9 +104,9 @@ namespace OmmoBackend.Services.Implementations
             if (request.Loadboard == LoadboardType.DAT && string.IsNullOrWhiteSpace(request.ServiceEmail))
                 return ServiceResponse<object>.ErrorResponse("ServiceEmail is required for DAT integration.", 400);
 
-            // Validate conditional fields
-            if (request.Loadboard == LoadboardType.Truckstop && string.IsNullOrWhiteSpace(request.ServiceEmail))
-                return ServiceResponse<object>.ErrorResponse("ServiceEmail (username) is required for Truckstop integration.", 400);
+            // // Validate conditional fields
+            // if (request.Loadboard == LoadboardType.Truckstop && string.IsNullOrWhiteSpace(request.ServiceEmail))
+            //     return ServiceResponse<object>.ErrorResponse("ServiceEmail (username) is required for Truckstop integration.", 400);
 
             if (!request.IsNew && string.IsNullOrWhiteSpace(request.ExistingEmail))
                 return ServiceResponse<object>.ErrorResponse("ExistingEmail is required for existing account setup.", 400);
@@ -131,6 +132,7 @@ namespace OmmoBackend.Services.Implementations
             var companyDotNumber = $"{user.CompanyDotNumber ?? ""}";
             var companyAddress = $"{user.CompanyAddress ?? ""}";
             var destinationEmail = "sarwaich@ommo.ai";
+            //var destinationEmail = "saqlain@ommo.ai";
 
             // Use EF execution strategy for resilience (e.g., Azure SQL transient retries)
             var strategy = _dbContext.Database.CreateExecutionStrategy();
@@ -209,21 +211,11 @@ namespace OmmoBackend.Services.Implementations
 
                         // Encrypt and prepare credentials
                         var encryptedServiceEmail = _encryption.Encrypt(request.ServiceEmail!); // non-null asserted due to validation
-                        var credentials = new Dictionary<string, string> { ["ServiceEmail"] = encryptedServiceEmail };
+                        var credentials = new Dictionary<string, string> { ["email"] = encryptedServiceEmail };
                         credentialsJson = JsonSerializer.Serialize(credentials);
                     }
                     else if (request.Loadboard == LoadboardType.Truckstop)
-                    {
-                        if (string.IsNullOrWhiteSpace(request.ServiceEmail))
-                            throw new ArgumentException("Service_Email (username) is required for Truckstop integration.", nameof(request.ServiceEmail));
-
-                        // fetch IntegrationID from global table
-                        var globalCred = await _globalIntegrationCredentialRepository.GetByIntegrationIdAsync(3);
-                        if (globalCred == null)
-                            throw new InvalidOperationException("Truckstop IntegrationID not found.");
-
-                        var integrationID = globalCred.credential_value;
-
+                    { 
                         if (request.IsNew)
                         {
                             subject = $"New Account & SOAP API Credentials Request – {customerName}";
@@ -235,11 +227,13 @@ namespace OmmoBackend.Services.Implementations
                                 <ul>
                                     <li><b>Customer Name: {customerName}</li>
                                     <li><b>Main Contact: {mainContactName}, {mainContactPhone}</li>
+                                    <li><b>Truckstop Login Email: {request.ExistingEmail}</li>
                                     <li><b>Company MCNumber:</b> {companyMCNumber}</li>
                                     <li><b>Company DotNumber:</b> {companyDotNumber}</li>
                                     <li><b>Company Address:</b> {companyAddress}</li>
+                                    <li><b>Account Type:</b> New</li>
                                     <li><b>Integration Service & Interface: Truckstop – SOAP API</li>
-                                    <li><b>IntegrationID: {integrationID}</li>
+                                    
                                 </ul>                       
 
                                 <p>Thank you,<br/>Ommo AI</p>";
@@ -258,25 +252,23 @@ namespace OmmoBackend.Services.Implementations
                                 <ul>
                                     <li><b>Customer Name: {customerName}</li>
                                     <li><b>Main Contact: {mainContactName}, {mainContactPhone}</li>
-                                    <li><b>Truckstop Login Email (Existing): {request.ExistingEmail}</li>
+                                    <li><b>Truckstop Login Email: {request.ExistingEmail}</li>
                                     <li><b>Company MCNumber:</b> {companyMCNumber}</li>
                                     <li><b>Company DotNumber:</b> {companyDotNumber}</li>
                                     <li><b>Company Address:</b> {companyAddress}</li>
+                                    <li><b>Account Type:</b> Existing</li>
                                     <li><b>Integration Service & Interface: Truckstop – SOAP API</li>
-                                    <li><b>IntegrationID: {integrationID}</li>
+                                    
                                 </ul>                        
 
                                 <p>Thank you,<br/>Ommo AI</p>";
                         }
 
+                        // Encrypt and prepare credentials
                         var encryptedServiceEmail = _encryption.Encrypt(request.ServiceEmail!); // non-null asserted due to validation
-                        var credentials = new Dictionary<string, string> { ["ServiceEmail"] = encryptedServiceEmail };
+                        var credentials = new Dictionary<string, string> { ["email"] = encryptedServiceEmail };
                         credentialsJson = JsonSerializer.Serialize(credentials);
-
-                        //// Store integrationID in credentials for traceability (encrypted)
-                        //var encryptedIntegrationId = _encryption.Encrypt(integrationID ?? string.Empty);
-                        //var credentials = new Dictionary<string, string> { ["IntegrationID"] = encryptedIntegrationId };
-                        //credentialsJson = JsonSerializer.Serialize(credentials);
+                        credentialsJson = "{}";
                     }
                     else
                     {
@@ -302,8 +294,7 @@ namespace OmmoBackend.Services.Implementations
                     {
                         default_integration_id = dbLoadboardId,
                         integration_status = "pending", // lowercase to satisfy DB CHECK
-                        //credentials = !string.IsNullOrWhiteSpace(credentialsJson) ? JsonDocument.Parse(credentialsJson) : null,
-                        credentials = null,
+                        credentials = !string.IsNullOrWhiteSpace(credentialsJson) ? JsonDocument.Parse(credentialsJson) : null,
                         company_id = user.CompanyId,
                         last_updated = DateTime.UtcNow,
                         requested_by_email = user.UserEmail
@@ -313,6 +304,24 @@ namespace OmmoBackend.Services.Implementations
 
                     // Commit transaction
                     await transaction.CommitAsync();
+
+                    if (request.IsOnboarding)
+                    {
+                        try
+                        {
+                            await _onboardingService.AdvanceToPaymentStepAsync(companyId);
+
+                            _logger.LogInformation(
+                                "Onboarding advanced to payment for CompanyId={CompanyId}",
+                                companyId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Failed to update onboarding step after integration success. CompanyId={CompanyId}",
+                                companyId);
+                        }
+                    }
 
                     _logger.LogInformation("Integration request processed successfully. CompanyId={CompanyId}, UserId={UserId}, Loadboard={Loadboard}, IntegrationId={IntegrationId}",
                     companyId, userId, request.Loadboard, integration.integration_id);
@@ -358,29 +367,25 @@ namespace OmmoBackend.Services.Implementations
             });
         }
 
-        public async Task<ServiceResponse<object>> ToggleStatusAsync(ToggleIntegrationStatusRequest request)
+        public async Task<ServiceResponse<string>> ToggleIntegrationStatusAsync(int integrationId)
         {
-            var integration = await _integrationRepository.GetByIdAsync(request.IntegrationId);
+            var integration = await _integrationRepository.GetByIdAsync(integrationId);
             if (integration == null)
-                return ServiceResponse<object>.ErrorResponse("Integration not found.");
+                return ServiceResponse<string>.ErrorResponse("Integration not found.", 404);
 
-            integration.integration_status =
-                integration.integration_status == "active" ? "inactive" : "active";
+            if (integration.integration_status.Equals("active", StringComparison.OrdinalIgnoreCase))
+                integration.integration_status = "inactive";
+
+            else if (integration.integration_status.Equals("inactive", StringComparison.OrdinalIgnoreCase))
+                integration.integration_status = "active";
+
+            else
+                return ServiceResponse<string>.ErrorResponse("Current status cannot be changed.", 400);
 
             integration.last_updated = DateTime.UtcNow;
-            integration.requested_by_email = request.RequestedByEmail;
-
             await _integrationRepository.UpdateAsync(integration);
 
-            var result = new
-            {
-                integration_id = integration.integration_id,
-                newStatus = integration.integration_status,
-                last_updated = integration.last_updated
-            };
-
-            return ServiceResponse<object>.SuccessResponse(result, "Integration status updated successfully.");
+            return ServiceResponse<string>.SuccessResponse(integration.integration_status, "Integration status updated successfully.");
         }
-
     }
 }

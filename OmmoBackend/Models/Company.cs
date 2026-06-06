@@ -50,5 +50,7 @@ namespace OmmoBackend.Models
         public string? logo { get; set; }
         public int? fleet_size { get; set; }
         public string? eld { get; set; }
+        public bool is_verified { get; set; } = false;
+        public VerificationStatus verification_status { get; set; } = VerificationStatus.pending;
     }
 }

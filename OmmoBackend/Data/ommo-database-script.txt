@@ -1843,3 +1843,235 @@ VALUES (262, 7, 1, 1);
 
 insert into role_component_relationship (role_component_relationship_id, component_id, role_id, access_level) 
 values (233, 15, 1, 2);
+
+
+
+CREATE TYPE onboarding_step AS ENUM (
+  'questionnaire',
+  'integration',
+  'payment',
+  'call_settings',
+  'completed'
+);
+
+CREATE TABLE company_onboarding (
+  company_onboarding_id SERIAL PRIMARY KEY,
+  company_id INTEGER UNIQUE NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
+  current_step onboarding_step NOT NULL DEFAULT 'questionnaire',
+  is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+  questionnaire_completed_at TIMESTAMPTZ,
+  integration_completed_at TIMESTAMPTZ,
+  payment_completed_at TIMESTAMPTZ,
+  call_settings_completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE questionnaire (
+  questionnaire_id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
+  questionnaire_number INT NOT NULL CHECK (questionnaire_number BETWEEN 1 AND 3),
+  answer TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_company_question UNIQUE (company_id, questionnaire_number)
+);
+
+CREATE INDEX idx_questionnaire_company_id ON questionnaire(company_id);
+
+ALTER TABLE call
+ADD COLUMN call_duration INTEGER;
+
+
+CREATE TYPE subscription_status AS ENUM (
+  'trial',
+  'active',
+  'inactive'
+);
+
+CREATE TABLE package_plan (
+  plan_id SERIAL PRIMARY KEY,
+  plan_type TEXT NOT NULL CHECK (plan_type IN ('standard', 'custom')),
+  plan_name TEXT NOT NULL,
+  concurrency INT NOT NULL,
+  interval TEXT NOT NULL CHECK (interval IN ('monthly', 'annual')),
+  stripe_price_id TEXT NOT NULL,
+  price NUMERIC(10,2) NOT NULL,
+  allowed_users INT NOT NULL,
+  company_id INTEGER REFERENCES company(company_id) ON DELETE CASCADE,
+  est_minute INT NOT NULL,
+  plan_status TEXT NOT NULL DEFAULT 'active' CHECK (plan_status IN ('active', 'inactive')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_custom_company CHECK (plan_type = 'custom' OR company_id IS NULL)
+);
+
+CREATE TABLE companies_payment_profile (
+  company_id INTEGER PRIMARY KEY REFERENCES company(company_id) ON DELETE CASCADE,
+  stripe_customer_id TEXT UNIQUE,
+  stripe_subscription_id TEXT UNIQUE,
+  subscription_plan INTEGER REFERENCES package_plan(plan_id),
+  subscription_status subscription_status NOT NULL DEFAULT 'inactive',
+  trial_started_at TIMESTAMPTZ,
+  trial_ends_at TIMESTAMPTZ,
+  current_period_start TIMESTAMPTZ DEFAULT NOW(),
+  current_period_end TIMESTAMPTZ,
+  cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+  canceled_at TIMESTAMPTZ,
+  minutes_used INT NOT NULL DEFAULT 0,
+  payment_failed BOOLEAN NOT NULL DEFAULT FALSE,
+  payment_failed_at TIMESTAMPTZ,
+  payment_retry_count INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE company_plan_change_request (
+  company_plan_change_request_id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
+  request_plan INTEGER NOT NULL REFERENCES package_plan(plan_id),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'scheduled', 'completed')),
+  current_cycle_end_date TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE company_bill_history (
+  company_bill_history_id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
+  start_date TIMESTAMPTZ NOT NULL,
+  end_date TIMESTAMPTZ NOT NULL,
+  minutes_used INT NOT NULL DEFAULT 0,
+  minute_unused INT NOT NULL DEFAULT 0,
+  package_name TEXT NOT NULL,
+  amount NUMERIC(10,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE custom_package_request (
+  custom_package_request_id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  est_minutes INT NOT NULL,
+  concurrency INT NOT NULL,
+  message TEXT,
+  allowed_users INT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO package_plan
+  (plan_type, plan_name, concurrency, interval, stripe_price_id, price, allowed_users, company_id, est_minute, plan_status)
+VALUES
+  ('standard', 'Basic-annual',      2, 'annual',  'price_XXXX_basic_annual',      950.00,   2, NULL, 2400,  'active'),
+  ('standard', 'Startup-annual',    4, 'annual',  'price_XXXX_startup_annual',    2870.00,  4, NULL, 9000,  'active'),
+  ('standard', 'Enterprise-annual', 6, 'annual',  'price_XXXX_enterprise_annual', 5750.00,  8, NULL, 19200, 'active'),
+  ('standard', 'Basic-monthly',     2, 'monthly', 'price_XXXX_basic_monthly',     99.00,    2, NULL, 200,   'active'),
+  ('standard', 'Startup-monthly',   4, 'monthly', 'price_XXXX_startup_monthly',   299.00,   4, NULL, 750,   'active'),
+  ('standard', 'Enterprise-monthly',6, 'monthly', 'price_XXXX_enterprise_monthly',599.00,   8, NULL, 1600,  'active');
+
+
+BEGIN;
+
+-- 1. Create new enum for verification_status
+CREATE TYPE verification_status AS ENUM (
+  'pending',
+  'verified',
+  'failed_verification'
+);
+
+-- 2. Alter company table
+ALTER TABLE company
+ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN verification_status verification_status NOT NULL DEFAULT 'pending';
+
+-- 3. Alter onboarding_step enum (add new value)
+ALTER TYPE onboarding_step
+ADD VALUE IF NOT EXISTS 'verification';
+
+-- 4. Alter company_onboarding table
+ALTER TABLE company_onboarding
+ADD COLUMN verification_completed_at TIMESTAMPTZ NULL;
+
+COMMIT;
+
+
+INSERT INTO global_integration_credentials
+(default_integration_id, credential_name, credential_value, created_at, updated_at)
+VALUES
+(3, 'truckstop_integration_id', 'cGroKnMiKQFb6qfiFG4okBy4bQDvb+mmNuYm80p3v+//PQ==', NOW(), NOW());
+
+CREATE TYPE plan_status AS ENUM (
+  'active', 
+  'inactive'
+);
+
+CREATE TYPE plan_type AS ENUM (
+  'standard',
+  'custom'
+);
+
+CREATE TYPE plan_interval AS ENUM (
+  'monthly',
+  'annual'
+);
+
+ALTER TABLE refresh_tokens 
+ADD COLUMN is_used BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE refresh_tokens 
+ADD COLUMN used_at TIMESTAMP;
+
+ALTER TABLE company_bill_history
+ADD COLUMN package_id INTEGER NULL;
+
+ALTER TABLE company_bill_history
+ADD CONSTRAINT fk_company_bill_history_package
+FOREIGN KEY (package_id)
+REFERENCES package_plan(plan_id)
+ON DELETE SET NULL;
+
+ALTER TABLE package_plan
+ADD COLUMN is_transcript_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN is_takeover_allowed   BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE package_plan
+SET is_transcript_allowed = TRUE,
+    is_takeover_allowed   = TRUE
+WHERE plan_id IN (4, 5, 7, 8);
+
+
+CREATE TABLE support_request (
+  support_request_id SERIAL PRIMARY KEY,
+  subject TEXT NOT NULL,
+  message TEXT NOT NULL,
+  contact_email TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'closed')) DEFAULT 'pending',
+  is_ommo_customer BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE company
+ADD COLUMN total_minute_consumed INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE company
+ADD COLUMN total_billed NUMERIC(18,2) NOT NULL DEFAULT 0;
+
+CREATE TABLE admin_analytics
+(
+    id SERIAL PRIMARY KEY,
+
+    period TIMESTAMPTZ NOT NULL,
+
+    companies_registered INTEGER NOT NULL DEFAULT 0,
+    minutes_consumed INTEGER NOT NULL DEFAULT 0,
+    answered_calls_made INTEGER NOT NULL DEFAULT 0,
+    unanswered_calls_made INTEGER NOT NULL DEFAULT 0,
+    loads_booked INTEGER NOT NULL DEFAULT 0,
+
+    money_made NUMERIC(18,2) NOT NULL DEFAULT 0,
+    avg_per_min_charged NUMERIC(18,4) NOT NULL DEFAULT 0,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE companies_payment_profile
+ALTER COLUMN current_period_start DROP NOT NULL;

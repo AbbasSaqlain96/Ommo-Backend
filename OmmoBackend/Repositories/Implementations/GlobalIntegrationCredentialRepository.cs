@@ -18,5 +18,13 @@ namespace OmmoBackend.Repositories.Implementations
             return await _dbContext.global_integration_credentials
                             .FirstOrDefaultAsync(g => g.default_integration_id == defaultIntegrationId);
         }
+
+        public async Task<GlobalIntegrationCredentials?> GetCredentialAsync(int integrationId, string key)
+        {
+            return await _dbContext.global_integration_credentials
+                .FirstOrDefaultAsync(x =>
+                    x.default_integration_id == integrationId &&
+                    x.credential_name == key);
+        }
     }
 }

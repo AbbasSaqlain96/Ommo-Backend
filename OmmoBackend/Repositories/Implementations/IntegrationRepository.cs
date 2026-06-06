@@ -1,5 +1,4 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.VisualBasic;
 using OmmoBackend.Data;
 using OmmoBackend.Dtos;
 using OmmoBackend.Models;
@@ -73,7 +72,7 @@ namespace OmmoBackend.Repositories.Implementations
                         join i in _dbContext.integrations
                             on di.default_integration_id equals i.default_integration_id
                         where i.company_id == companyId && di.integration_name == provider && i.integration_status == "active"
-                        select new 
+                        select new
                         {
                             Global = new DefaultIntegrations
                             {
@@ -132,13 +131,20 @@ namespace OmmoBackend.Repositories.Implementations
 
         public async Task<Integrations> GetByIdAsync(int id)
         {
-            return await _dbContext.integrations.FirstOrDefaultAsync(i => i.integration_id == id);
+            return await _dbContext.integrations.FindAsync(id);
         }
 
         public async Task UpdateAsync(Integrations integration)
         {
             _dbContext.integrations.Update(integration);
             await _dbContext.SaveChangesAsync();
+        }
+
+        public async Task<List<Integrations>> GetByCompanyAsync(int companyId)
+        {
+            return await _dbContext.integrations
+                .Where(i => i.company_id == companyId)
+                .ToListAsync();
         }
     }
 }
